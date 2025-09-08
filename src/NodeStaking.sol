@@ -19,6 +19,8 @@ contract NodeStaking {
         uint256 stake; // locked native token (utility token on subnet)
         uint64 capacity; // bytes committed (≤ stake / stakePerByte)
         uint64 used; // active bytes
+        uint256 publicKeyX; // EdDSA public key X coordinate for proof verification
+        uint256 publicKeyY; // EdDSA public key Y coordinate for proof verification
     }
 
     mapping(address => NodeInfo) public nodes;
@@ -47,11 +49,17 @@ contract NodeStaking {
     event NodeCapacityIncreased(address indexed node, uint256 additionalStake, uint64 newCapacity);
     event NodeCapacityDecreased(address indexed node, uint256 releasedStake, uint64 newCapacity);
     event NodeUnstaked(address indexed node, uint256 stakeReturned);
+    event NodeSlashed(address indexed node, uint256 slashAmount, uint64 newCapacity, bool forcedOrderExit);
+    event ForcedOrderExit(address indexed node, uint256[] orderIds, uint256 additionalSlash);
 
     /// @notice Register a new storage node by locking native tokens proportional to the desired capacity.
     /// @param _capacity The number of bytes the node commits to serve. Must be > 0.
-    function stakeNode(uint64 _capacity) external payable nonReentrant {
+    /// @param _publicKeyX EdDSA public key X coordinate for proof verification
+    /// @param _publicKeyY EdDSA public key Y coordinate for proof verification
+    function stakeNode(uint64 _capacity, uint256 _publicKeyX, uint256 _publicKeyY) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
+        require(_publicKeyX != 0 && _publicKeyY != 0, "invalid public key");
+        
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
 
@@ -61,6 +69,8 @@ contract NodeStaking {
         info.stake = requiredStake;
         info.capacity = _capacity;
         info.used = 0;
+        info.publicKeyX = _publicKeyX;
+        info.publicKeyY = _publicKeyY;
 
         emit NodeStaked(msg.sender, requiredStake, _capacity);
     }
@@ -122,9 +132,17 @@ contract NodeStaking {
     /// @return stake The amount of stake locked
     /// @return capacity The total capacity in bytes
     /// @return used The currently used capacity in bytes
-    function getNodeInfo(address node) external view returns (uint256 stake, uint64 capacity, uint64 used) {
+    /// @return publicKeyX The node's public key X coordinate
+    /// @return publicKeyY The node's public key Y coordinate
+    function getNodeInfo(address node) external view returns (
+        uint256 stake, 
+        uint64 capacity, 
+        uint64 used,
+        uint256 publicKeyX,
+        uint256 publicKeyY
+    ) {
         NodeInfo storage info = nodes[node];
-        return (info.stake, info.capacity, info.used);
+        return (info.stake, info.capacity, info.used, info.publicKeyX, info.publicKeyY);
     }
 
     /// @notice Update the used capacity for a node (only callable by the market contract)
@@ -150,5 +168,105 @@ contract NodeStaking {
     function isValidNode(address node) public view returns (bool) {
         NodeInfo storage info = nodes[node];
         return info.capacity > info.used; // also implies capacity > 0
+    }
+
+    /// @notice Slash a node's stake and reduce capacity accordingly
+    /// @param node The address of the node to slash
+    /// @param slashAmount The amount of stake to slash (in wei)
+    /// @return forcedOrderExit True if the capacity reduction forced order exits
+    function slashNode(address node, uint256 slashAmount) external onlyMarket nonReentrant returns (bool forcedOrderExit) {
+        NodeInfo storage info = nodes[node];
+        require(info.capacity > 0, "not a node");
+        require(slashAmount > 0, "invalid slash amount");
+        require(slashAmount <= info.stake, "slash exceeds stake");
+
+        // Reduce stake
+        info.stake -= slashAmount;
+        
+        // Calculate new capacity based on reduced stake
+        uint64 newCapacity = uint64(info.stake / STAKE_PER_BYTE);
+        
+        // Check if capacity reduction forces order exits
+        forcedOrderExit = newCapacity < info.used;
+        
+        if (forcedOrderExit) {
+            // Severe slashing: additional penalty for forced order exits
+            uint256 additionalSlash = slashAmount / 2; // 50% additional penalty
+            if (additionalSlash > info.stake) {
+                additionalSlash = info.stake;
+            }
+            
+            if (additionalSlash > 0) {
+                info.stake -= additionalSlash;
+                newCapacity = uint64(info.stake / STAKE_PER_BYTE);
+            }
+            
+            // Set used capacity to new capacity (will be updated by market when orders are quit)
+            info.used = newCapacity;
+            info.capacity = newCapacity;
+            
+            emit ForcedOrderExit(node, new uint256[](0), additionalSlash); // Market will populate order IDs
+        } else {
+            // Normal capacity reduction
+            info.capacity = newCapacity;
+        }
+
+        // Send slashed amount to market contract (could be redistributed or burned)
+        uint256 totalSlashed = slashAmount + (forcedOrderExit ? (slashAmount <= info.stake ? slashAmount / 2 : 0) : 0);
+        if (totalSlashed > 0) {
+            payable(market).transfer(totalSlashed);
+        }
+
+        emit NodeSlashed(node, slashAmount, newCapacity, forcedOrderExit);
+        
+        return forcedOrderExit;
+    }
+
+    /// @notice Emergency function to force reduce a node's used capacity (called by market after forced order exits)
+    /// @param node The address of the node
+    /// @param newUsed The new used capacity after order exits
+    function forceReduceUsed(address node, uint64 newUsed) external onlyMarket {
+        NodeInfo storage info = nodes[node];
+        require(info.capacity > 0, "not a node");
+        require(newUsed <= info.capacity, "new used exceeds capacity");
+        info.used = newUsed;
+    }
+
+    /// @notice Get the maximum slashable amount for a node (leaving minimum viable stake)
+    /// @param node The address of the node
+    /// @return maxSlashable The maximum amount that can be slashed
+    function getMaxSlashable(address node) external view returns (uint256 maxSlashable) {
+        NodeInfo storage info = nodes[node];
+        if (info.capacity == 0) return 0;
+        
+        // Ensure node retains enough stake for currently used capacity
+        uint256 requiredStakeForUsed = uint256(info.used) * STAKE_PER_BYTE;
+        if (info.stake <= requiredStakeForUsed) return 0;
+        
+        return info.stake - requiredStakeForUsed;
+    }
+
+    /// @notice Calculate capacity reduction from a slash amount
+    /// @param node The address of the node
+    /// @param slashAmount The proposed slash amount
+    /// @return newCapacity The resulting capacity after slash
+    /// @return willForceExit True if this slash would force order exits
+    function simulateSlash(address node, uint256 slashAmount) external view returns (uint64 newCapacity, bool willForceExit) {
+        NodeInfo storage info = nodes[node];
+        if (info.capacity == 0 || slashAmount > info.stake) return (0, false);
+        
+        uint256 remainingStake = info.stake - slashAmount;
+        newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
+        willForceExit = newCapacity < info.used;
+        
+        if (willForceExit) {
+            // Account for additional slash penalty
+            uint256 additionalSlash = slashAmount / 2;
+            if (additionalSlash > remainingStake) {
+                additionalSlash = remainingStake;
+            }
+            remainingStake -= additionalSlash;
+            newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
+        }
     }
 }
