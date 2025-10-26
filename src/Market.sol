@@ -9,11 +9,46 @@ contract FileMarket {
     uint256 constant EPOCH = 4 * PERIOD;
     uint256 constant STEP = 30 seconds; // proof submission period
     uint256 immutable GENESIS_TS; // contract deploy timestamp
+    address public owner;
+    mapping(address => bool) public slashAuthorities;
+    uint256 private _marketLock = 1;
 
     constructor() {
         GENESIS_TS = block.timestamp;
+        owner = msg.sender;
         nodeStaking = new NodeStaking(address(this));
         poiVerifier = new Verifier();
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "not owner");
+        _;
+    }
+
+    modifier onlySlashAuthority() {
+        require(msg.sender == owner || slashAuthorities[msg.sender], "not authorized");
+        _;
+    }
+
+    modifier nonReentrant() {
+        require(_marketLock == 1, "reentrant");
+        _marketLock = 2;
+        _;
+        _marketLock = 1;
+    }
+
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event SlashAuthorityUpdated(address indexed authority, bool allowed);
+
+    function transferOwnership(address _newOwner) external onlyOwner {
+        require(_newOwner != address(0), "invalid owner");
+        emit OwnershipTransferred(owner, _newOwner);
+        owner = _newOwner;
+    }
+
+    function setSlashAuthority(address _authority, bool _allowed) external onlyOwner {
+        slashAuthorities[_authority] = _allowed;
+        emit SlashAuthorityUpdated(_authority, _allowed);
     }
 
     function currentPeriod() public view returns (uint256) {
@@ -62,11 +97,16 @@ contract FileMarket {
     mapping(address => uint256[]) public nodeToOrders; // node -> assigned order IDs
 
     // Node rewards system
+    mapping(address => uint256) public nodePendingRewards; // rewards owed after assignment removal
     mapping(address => uint256) public nodeEarnings; // total earnings accumulated
     mapping(address => uint256) public nodeWithdrawn; // total amount withdrawn
     mapping(address => uint256) public nodeLastClaimPeriod; // last period when rewards were claimed
     mapping(address => mapping(uint256 => uint256)) public nodeOrderStartPeriod; // node -> orderId -> period when started storing
-
+    
+    // Escrow tracking for proper payment distribution
+    mapping(uint256 => uint256) public orderEscrowWithdrawn; // orderId -> amount already paid to nodes
+    mapping(uint256 => mapping(address => uint256)) public nodeOrderEarnings; // orderId -> node -> earned amount
+    
     // Proof system - stateless rolling challenges
     uint256 public currentRandomness; // current heartbeat randomness
     uint256 public lastChallengeStep; // last step when challenge was issued
@@ -80,6 +120,7 @@ contract FileMarket {
     mapping(address => uint256) public nodeToProveOrderId; // node -> order they're proving (current challenge)
     bool public primaryProofReceived; // primary proof received for current challenge
     bool public primaryFailureReported; // primary failure already reported for current step
+    bool public secondarySlashProcessed; // secondary slashing already handled for current challenge
 
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
@@ -103,7 +144,7 @@ contract FileMarket {
         uint16 _periods,
         uint8 _replicas,
         uint256 _pricePerBytePerPeriod
-    ) external payable returns (uint256 orderId) {
+    ) external payable nonReentrant returns (uint256 orderId) {
         require(_maxSize > 0, "invalid size");
         require(_periods > 0, "invalid periods");
         require(_replicas > 0, "invalid replicas");
@@ -144,6 +185,7 @@ contract FileMarket {
         
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
+        require(!isOrderExpired(_orderId), "order expired");
         require(order.filled < order.replicas, "order already filled");
         require(nodeStaking.hasCapacity(msg.sender, order.maxSize), "insufficient capacity");
 
@@ -253,56 +295,47 @@ contract FileMarket {
     }
 
     // Complete expired orders and free up node capacity
-    function completeExpiredOrder(uint256 _orderId) external {
+    function completeExpiredOrder(uint256 _orderId) external nonReentrant {
         require(isOrderExpired(_orderId), "order not expired");
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
 
-        // Free up capacity from all assigned nodes
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            address node = assignedNodes[i];
-            (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
-            nodeStaking.updateNodeUsed(node, used - order.maxSize);
-            
-            // Remove order from node's order list
-            _removeOrderFromNode(node, _orderId);
-        }
+        uint256 settlePeriod = order.startPeriod + order.periods;
+        _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Remove from active orders and clean up
         _removeFromActiveOrders(_orderId);
+        uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
+        address orderOwner = order.owner;
+
         delete orders[_orderId];
         delete orderToNodes[_orderId];
+
+        // Refund any remaining escrow to order owner
+        if (refundAmount > 0) {
+            payable(orderOwner).transfer(refundAmount);
+        }
 
         emit OrderCompleted(_orderId);
     }
 
     // User cancels order with refund (minus any penalties)
-    function cancelOrder(uint256 _orderId) external {
+    function cancelOrder(uint256 _orderId) external nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner == msg.sender, "not order owner");
         require(!isOrderExpired(_orderId), "order already expired");
 
-        uint256 refundAmount = order.escrow;
-        
-        // If nodes are already storing, apply penalty (e.g., 10%)
-        if (order.filled > 0) {
-            uint256 penalty = refundAmount / 10; // 10% penalty
+        uint256 settlePeriod = currentPeriod();
+        ( , uint256 assignmentCount) = _settleAndReleaseNodes(order, _orderId, settlePeriod);
+
+        // Clean up order data
+        uint256 remainingEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
+        uint256 refundAmount = remainingEscrow;
+        if (assignmentCount > 0 && remainingEscrow > 0) {
+            uint256 penalty = remainingEscrow / 10; // 10% penalty
             refundAmount -= penalty;
         }
 
-        // Free up capacity from all assigned nodes
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            address node = assignedNodes[i];
-            (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
-            nodeStaking.updateNodeUsed(node, used - order.maxSize);
-            
-            // Remove order from node's order list
-            _removeOrderFromNode(node, _orderId);
-        }
-
-        // Clean up order data
         _removeFromActiveOrders(_orderId);
         delete orders[_orderId];
         delete orderToNodes[_orderId];
@@ -350,8 +383,7 @@ contract FileMarket {
     }
 
     // External slashing function (for challenges/penalties)
-    function slashNode(address _node, uint256 _slashAmount, string calldata _reason) external {
-        // TODO: Add proper access control (e.g., only challenge system)
+    function slashNode(address _node, uint256 _slashAmount, string calldata _reason) external onlySlashAuthority nonReentrant {
         require(_slashAmount > 0, "invalid slash amount");
         
         bool forcedOrderExit = nodeStaking.slashNode(_node, _slashAmount);
@@ -369,53 +401,91 @@ contract FileMarket {
         uint256[] memory exitedOrders = new uint256[](nodeOrders.length);
         uint256 exitCount = 0;
         
-        // Get node's new capacity after slashing
-        (, uint64 newCapacity,,,) = nodeStaking.getNodeInfo(_node);
+        // Get node's new capacity and previous usage after slashing
+        (, uint64 newCapacity, uint64 usedBefore,,) = nodeStaking.getNodeInfo(_node);
         uint64 totalFreed = 0;
-        
+        uint256 settlePeriod = currentPeriod();
+
         // Remove node from all its orders (starting from the end to avoid index issues)
-        for (int256 i = int256(nodeOrders.length) - 1; i >= 0; i--) {
-            uint256 orderId = nodeOrders[uint256(i)];
-            FileOrder storage order = orders[orderId];
-            
-            if (order.owner != address(0)) { // Order still exists
-                // Find node in order's assigned nodes and remove
-                address[] storage assignedNodes = orderToNodes[orderId];
-                for (uint256 j = 0; j < assignedNodes.length; j++) {
-                    if (assignedNodes[j] == _node) {
-                        // Remove node from order
-                        if (j != assignedNodes.length - 1) {
-                            assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
-                        }
-                        assignedNodes.pop();
-                        order.filled--;
-                        totalFreed += order.maxSize;
-                        exitedOrders[exitCount++] = orderId;
-                        break;
-                    }
-                }
+        uint256 i = nodeOrders.length;
+        while (i > 0) {
+            i--;
+            uint256 exitOrderId = nodeOrders[i];
+            uint64 freed = _removeAssignmentDuringForcedExit(
+                _node,
+                exitOrderId,
+                settlePeriod
+            );
+
+            if (freed > 0) {
+                totalFreed += freed;
+                exitedOrders[exitCount++] = exitOrderId;
             }
         }
         
         // Clear node's order list
         delete nodeToOrders[_node];
         
-        // Update node's used capacity to match new capacity
-        nodeStaking.forceReduceUsed(_node, newCapacity);
+        uint64 newUsed = usedBefore > totalFreed ? usedBefore - totalFreed : 0;
+        if (newUsed > newCapacity) {
+            newUsed = newCapacity;
+        }
+
+        // Update node's used capacity to match the data that remains
+        nodeStaking.forceReduceUsed(_node, newUsed);
         
         // Resize the exited orders array to actual count
         uint256[] memory actualExitedOrders = new uint256[](exitCount);
-        for (uint256 i = 0; i < exitCount; i++) {
-            actualExitedOrders[i] = exitedOrders[i];
+        for (uint256 idx = 0; idx < exitCount; idx++) {
+            actualExitedOrders[idx] = exitedOrders[idx];
         }
         
         emit ForcedOrderExits(_node, actualExitedOrders, totalFreed);
+    }
+
+    function _removeAssignmentDuringForcedExit(
+        address _node,
+        uint256 _orderId,
+        uint256 _settlePeriod
+    ) internal returns (uint64 freed) {
+        FileOrder storage order = orders[_orderId];
+        if (order.owner == address(0)) {
+            return 0;
+        }
+
+        address[] storage assignedNodes = orderToNodes[_orderId];
+        for (uint256 j = 0; j < assignedNodes.length; j++) {
+            if (assignedNodes[j] == _node) {
+                uint256 settledReward = _settleOrderReward(_node, _orderId, _settlePeriod);
+                if (settledReward > 0) {
+                    nodePendingRewards[_node] += settledReward;
+                }
+                delete nodeOrderStartPeriod[_node][_orderId];
+
+                if (j != assignedNodes.length - 1) {
+                    assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
+                }
+                assignedNodes.pop();
+                order.filled--;
+
+                return order.maxSize;
+            }
+        }
+
+        return 0;
     }
 
     // Helper function to remove node from a single order
     function _removeNodeFromOrder(address _node, uint256 _orderId, uint256 _nodeIndex) internal {
         FileOrder storage order = orders[_orderId];
         address[] storage assignedNodes = orderToNodes[_orderId];
+        uint256 settlePeriod = currentPeriod();
+
+        uint256 settledReward = _settleOrderReward(_node, _orderId, settlePeriod);
+        if (settledReward > 0) {
+            nodePendingRewards[_node] += settledReward;
+        }
+        delete nodeOrderStartPeriod[_node][_orderId];
         
         // Remove node from order assignments
         if (_nodeIndex != assignedNodes.length - 1) {
@@ -446,111 +516,129 @@ contract FileMarket {
         }
     }
 
-    // Get order details including expiration status
-    function getOrderDetails(uint256 _orderId) external view returns (
-        address owner,
-        uint64 maxSize,
-        uint16 periods,
-        uint8 replicas,
-        uint8 filled,
-        uint64 startPeriod,
-        uint256 escrow,
-        bool expired
-    ) {
-        FileOrder storage order = orders[_orderId];
-        return (
-            order.owner,
-            order.maxSize,
-            order.periods,
-            order.replicas,
-            order.filled,
-            order.startPeriod,
-            order.escrow,
-            isOrderExpired(_orderId)
-        );
+    function _settleAndReleaseNodes(
+        FileOrder storage order,
+        uint256 _orderId,
+        uint256 _settlePeriod
+    ) internal returns (uint256 totalSettled, uint256 initialAssignments) {
+        address[] storage assignedNodes = orderToNodes[_orderId];
+        initialAssignments = assignedNodes.length;
+        while (assignedNodes.length > 0) {
+            address node = assignedNodes[assignedNodes.length - 1];
+            uint256 settledReward = _settleOrderReward(node, _orderId, _settlePeriod);
+            if (settledReward > 0) {
+                nodePendingRewards[node] += settledReward;
+                totalSettled += settledReward;
+            }
+            delete nodeOrderStartPeriod[node][_orderId];
+
+            (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
+            nodeStaking.updateNodeUsed(node, used - order.maxSize);
+
+            assignedNodes.pop();
+            if (order.filled > 0) {
+                order.filled--;
+            }
+            _removeOrderFromNode(node, _orderId);
+        }
     }
+
+    // Get order details including expiration status
 
     // Node reward system
     
-    /// @notice Calculate and claim accumulated rewards for a node
-    function claimRewards() external {
+    /// @notice Calculate and claim accumulated rewards for a node from order escrows
+    function claimRewards() external nonReentrant {
         address node = msg.sender;
         require(nodeStaking.isValidNode(node), "not a valid node");
-        
-        uint256 totalRewards = _calculateNodeRewards(node);
-        uint256 claimable = totalRewards - nodeWithdrawn[node];
-        require(claimable > 0, "no rewards to claim");
-        
-        nodeWithdrawn[node] = totalRewards;
+
+        uint256 activeClaimable = _settleActiveOrders(node);
+        uint256 pendingClaimable = nodePendingRewards[node];
+
+        if (pendingClaimable > 0) {
+            nodePendingRewards[node] = 0;
+        }
+
+        uint256 totalClaimable = activeClaimable + pendingClaimable;
+        require(totalClaimable > 0, "no rewards to claim");
+
         nodeLastClaimPeriod[node] = currentPeriod();
-        
-        payable(node).transfer(claimable);
-        
-        emit RewardsClaimed(node, claimable);
+        nodeWithdrawn[node] += totalClaimable;
+
+        payable(node).transfer(totalClaimable);
+
+        emit RewardsClaimed(node, totalClaimable);
     }
-    
-    /// @notice Calculate total rewards earned by a node up to current period
-    function _calculateNodeRewards(address _node) internal returns (uint256 totalRewards) {
+
+    /// @notice Settle rewards for active orders and return the total amount accrued
+    function _settleActiveOrders(address _node) internal returns (uint256 totalClaimable) {
         uint256[] storage nodeOrders = nodeToOrders[_node];
+        if (nodeOrders.length == 0) {
+            return 0;
+        }
+
         uint256 currentPer = currentPeriod();
-        uint256 periodsCalculated = 0;
-        
+
         for (uint256 i = 0; i < nodeOrders.length; i++) {
             uint256 orderId = nodeOrders[i];
-            FileOrder storage order = orders[orderId];
-            
-            if (order.owner == address(0)) continue; // Order doesn't exist anymore
-            
-            uint256 nodeStartPeriod = nodeOrderStartPeriod[_node][orderId];
-            uint256 orderEndPeriod = order.startPeriod + order.periods;
-            
-            // Calculate how many periods this node has been storing this order
-            uint256 storageEndPeriod = currentPer > orderEndPeriod ? orderEndPeriod : currentPer;
-            
-            if (storageEndPeriod > nodeStartPeriod) {
-                uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
-                // Reward = maxSize * price * periods stored
-                uint256 orderReward = uint256(order.maxSize) * order.price * storagePeriods;
-                totalRewards += orderReward;
-                periodsCalculated += storagePeriods;
+            uint256 settled = _settleOrderReward(_node, orderId, currentPer);
+            if (settled > 0) {
+                totalClaimable += settled;
             }
         }
-        
-        // Update node earnings tracking
-        if (totalRewards > nodeEarnings[_node]) {
-            uint256 newEarnings = totalRewards - nodeEarnings[_node];
-            nodeEarnings[_node] = totalRewards;
-            emit RewardsCalculated(_node, newEarnings, periodsCalculated);
-        }
     }
-    
-    /// @notice View function to check claimable rewards without state changes
+
+    /// @notice View function to check claimable rewards from order escrows
     function getClaimableRewards(address _node) external view returns (uint256 claimable) {
-        uint256 totalRewards = _calculateNodeRewardsView(_node);
-        claimable = totalRewards > nodeWithdrawn[_node] ? totalRewards - nodeWithdrawn[_node] : 0;
-    }
-    
-    /// @notice View-only version of reward calculation
-    function _calculateNodeRewardsView(address _node) internal view returns (uint256 totalRewards) {
         uint256[] storage nodeOrders = nodeToOrders[_node];
         uint256 currentPer = currentPeriod();
-        
+
         for (uint256 i = 0; i < nodeOrders.length; i++) {
-            uint256 orderId = nodeOrders[i];
-            FileOrder storage order = orders[orderId];
-            
-            if (order.owner == address(0)) continue;
-            
-            uint256 nodeStartPeriod = nodeOrderStartPeriod[_node][orderId];
-            uint256 orderEndPeriod = order.startPeriod + order.periods;
-            uint256 storageEndPeriod = currentPer > orderEndPeriod ? orderEndPeriod : currentPer;
-            
-            if (storageEndPeriod > nodeStartPeriod) {
-                uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
-                uint256 orderReward = uint256(order.maxSize) * order.price * storagePeriods;
-                totalRewards += orderReward;
-            }
+            claimable += _calculateOrderClaimableUpTo(_node, nodeOrders[i], currentPer);
         }
+
+        claimable += nodePendingRewards[_node];
+    }
+
+    /// @notice Calculate claimable earnings for a node/order pair up to a target period
+    function _calculateOrderClaimableUpTo(
+        address _node,
+        uint256 _orderId,
+        uint256 _settlePeriod
+    ) internal view returns (uint256) {
+        FileOrder storage order = orders[_orderId];
+        if (order.owner == address(0)) return 0;
+
+        uint256 nodeStartPeriod = nodeOrderStartPeriod[_node][_orderId];
+
+        uint256 orderEndPeriod = order.startPeriod + order.periods;
+        uint256 storageEndPeriod = _settlePeriod > orderEndPeriod ? orderEndPeriod : _settlePeriod;
+        if (storageEndPeriod <= nodeStartPeriod) return 0;
+
+        uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
+        uint256 totalEarnable = uint256(order.maxSize) * order.price * storagePeriods;
+        uint256 alreadyEarned = nodeOrderEarnings[_orderId][_node];
+        if (totalEarnable <= alreadyEarned) return 0;
+
+        uint256 newEarnings = totalEarnable - alreadyEarned;
+        uint256 availableEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
+        return newEarnings > availableEscrow ? availableEscrow : newEarnings;
+    }
+
+    /// @notice Apply reward settlement for a node/order pair and return the credited amount
+    function _settleOrderReward(
+        address _node,
+        uint256 _orderId,
+        uint256 _settlePeriod
+    ) internal returns (uint256 claimableFromOrder) {
+        claimableFromOrder = _calculateOrderClaimableUpTo(_node, _orderId, _settlePeriod);
+        if (claimableFromOrder == 0) {
+            return 0;
+        }
+
+        nodeOrderEarnings[_orderId][_node] += claimableFromOrder;
+        orderEscrowWithdrawn[_orderId] += claimableFromOrder;
+        nodeEarnings[_node] += claimableFromOrder;
     }
     
     /// @notice Submit proof for current challenge
@@ -612,7 +700,7 @@ contract FileMarket {
     }
     
     /// @notice Report primary prover failure (callable after STEP period)
-    function reportPrimaryFailure() external {
+    function reportPrimaryFailure() external nonReentrant {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
         require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
         require(!primaryProofReceived, "primary proof was submitted");
@@ -645,8 +733,10 @@ contract FileMarket {
     }
     
     /// @notice Check and slash secondary provers who failed to submit proofs
-    function slashSecondaryFailures() external {
+    function slashSecondaryFailures() external nonReentrant {
         require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
+        require(!secondarySlashProcessed, "secondary slash settled");
+        secondarySlashProcessed = true;
         
         for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
             address secondaryProver = currentSecondaryProvers[i];
@@ -660,6 +750,7 @@ contract FileMarket {
                 }
                 
                 emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
+                proofSubmitted[secondaryProver] = true;
             }
         }
     }
@@ -725,6 +816,7 @@ contract FileMarket {
         // Reset primary prover proof status
         primaryProofReceived = false;
         primaryFailureReported = false;
+        secondarySlashProcessed = false;
         
         // Reset primary prover submission and order assignment
         if (currentPrimaryProver != address(0)) {
@@ -746,13 +838,33 @@ contract FileMarket {
         uint256 processed = 0;
         
         for (uint256 i = 0; i < activeOrders.length && processed < batchSize; i++) {
-            uint256 orderId = activeOrders[i];
-            if (isOrderExpired(orderId)) {
-                _completeExpiredOrderInternal(orderId);
+            uint256 activeOrderId = activeOrders[i];
+            if (isOrderExpired(activeOrderId)) {
+                _completeExpiredOrderInternal(activeOrderId);
                 processed++;
                 i--; // Adjust index since array was modified
             }
         }
+    }
+
+    /// @notice Manual heartbeat trigger (can be called by anyone if no challenge active)
+    function triggerHeartbeat() external nonReentrant {
+        require(
+            currentStep() > lastChallengeStep + 1 || lastChallengeStep == 0,
+            "challenge still active"
+        );
+        
+        // If no randomness set, initialize with block data
+        if (currentRandomness == 0) {
+            currentRandomness = uint256(keccak256(abi.encodePacked(
+                block.timestamp,
+                block.prevrandao,
+                msg.sender
+            )));
+        }
+        
+        _triggerNewHeartbeat();
+        _cleanupExpiredOrders();
     }
     
     /// @notice Internal version of completeExpiredOrder for heartbeat use
@@ -760,21 +872,20 @@ contract FileMarket {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return; // Already completed
         
-        // Free up capacity from all assigned nodes
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            address node = assignedNodes[i];
-            (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
-            nodeStaking.updateNodeUsed(node, used - order.maxSize);
-            
-            // Remove order from node's order list
-            _removeOrderFromNode(node, _orderId);
-        }
-        
+        uint256 settlePeriod = order.startPeriod + order.periods;
+        _settleAndReleaseNodes(order, _orderId, settlePeriod);
+
         // Remove from active orders and clean up
         _removeFromActiveOrders(_orderId);
+        uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
+        address orderOwner = order.owner;
+
         delete orders[_orderId];
         delete orderToNodes[_orderId];
+        
+        if (refundAmount > 0) {
+            payable(orderOwner).transfer(refundAmount);
+        }
         
         emit OrderCompleted(_orderId);
     }
@@ -786,9 +897,9 @@ contract FileMarket {
         uint256 claimable,
         uint256 lastClaimPeriod
     ) {
-        totalEarned = _calculateNodeRewardsView(_node);
+        totalEarned = nodeEarnings[_node];
         withdrawn = nodeWithdrawn[_node];
-        claimable = totalEarned > withdrawn ? totalEarned - withdrawn : 0;
+        claimable = this.getClaimableRewards(_node);
         lastClaimPeriod = nodeLastClaimPeriod[_node];
     }
 
@@ -819,5 +930,188 @@ contract FileMarket {
     /// @notice Check if challenge period has expired
     function isChallengeExpired() external view returns (bool) {
         return currentStep() > lastChallengeStep + 1;
+    }
+
+    /// @notice Get order escrow info
+    function getOrderEscrowInfo(uint256 _orderId) external view returns (
+        uint256 totalEscrow,
+        uint256 paidToNodes,
+        uint256 remainingEscrow
+    ) {
+        FileOrder storage order = orders[_orderId];
+        totalEscrow = order.escrow;
+        paidToNodes = orderEscrowWithdrawn[_orderId];
+        remainingEscrow = totalEscrow > paidToNodes ? totalEscrow - paidToNodes : 0;
+    }
+
+    /// @notice Get node's earnings from a specific order
+    function getNodeOrderEarnings(address _node, uint256 _orderId) external view returns (uint256) {
+        return nodeOrderEarnings[_orderId][_node];
+    }
+    
+    /// @notice Allow contract to receive ETH from slashed nodes
+    receive() external payable {}
+    
+    // =============================================================================
+    // NETWORK MONITORING FUNCTIONS FOR WEB DASHBOARD
+    // =============================================================================
+    
+    /// @notice Get comprehensive global marketplace statistics
+    function getGlobalStats() external view returns (
+        uint256 totalOrders,
+        uint256 activeOrdersCount,
+        uint256 totalEscrowLocked,
+        uint256 totalNodes,
+        uint256 totalCapacityStaked,
+        uint256 totalCapacityUsed,
+        uint256 currentRandomnessValue,
+        uint256 lastHeartbeatStep,
+        uint256 currentPeriod_,
+        uint256 currentStep_
+    ) {
+        totalOrders = nextOrderId - 1;
+        activeOrdersCount = activeOrders.length;
+        
+        // Calculate total escrow locked across all active orders
+        for (uint256 i = 1; i < nextOrderId; i++) {
+            if (orders[i].owner != address(0)) {
+                totalEscrowLocked += orders[i].escrow - orderEscrowWithdrawn[i];
+            }
+        }
+        
+        // Get node network statistics
+        (totalNodes, totalCapacityStaked, totalCapacityUsed) = nodeStaking.getNetworkStats();
+        
+        currentRandomnessValue = currentRandomness;
+        lastHeartbeatStep = lastChallengeStep;
+        currentPeriod_ = currentPeriod();
+        currentStep_ = currentStep();
+    }
+    
+    /// @notice Get recent order activity for dashboard
+    function getRecentOrders(uint256 count) external view returns (
+        uint256[] memory orderIds,
+        address[] memory owners,
+        uint64[] memory sizes,
+        uint16[] memory periods,
+        uint8[] memory replicas,
+        uint8[] memory filled,
+        uint256[] memory escrows,
+        bool[] memory isActive
+    ) {
+        uint256 totalOrders = nextOrderId - 1;
+        uint256 returnCount = count > totalOrders ? totalOrders : count;
+        if (returnCount == 0) {
+            return (new uint256[](0), new address[](0), new uint64[](0), new uint16[](0), 
+                    new uint8[](0), new uint8[](0), new uint256[](0), new bool[](0));
+        }
+
+        orderIds = new uint256[](returnCount);
+        owners = new address[](returnCount);
+        sizes = new uint64[](returnCount);
+        periods = new uint16[](returnCount);
+        replicas = new uint8[](returnCount);
+        filled = new uint8[](returnCount);
+        escrows = new uint256[](returnCount);
+        isActive = new bool[](returnCount);
+
+        uint256 currentPer = currentPeriod();
+
+        for (uint256 idx = 0; idx < returnCount; idx++) {
+            uint256 orderId = totalOrders - idx;
+            FileOrder storage order = orders[orderId];
+
+            orderIds[idx] = orderId;
+            owners[idx] = order.owner;
+            sizes[idx] = order.maxSize;
+            periods[idx] = order.periods;
+            replicas[idx] = order.replicas;
+            filled[idx] = order.filled;
+            escrows[idx] = order.escrow;
+
+            if (order.owner != address(0)) {
+                uint256 endPeriod = order.startPeriod + order.periods;
+                isActive[idx] = currentPer < endPeriod;
+            }
+        }
+    }
+    
+    /// @notice Get proof system health and challenge statistics
+    function getProofSystemStats() external view returns (
+        uint256 totalChallengeRounds,
+        uint256 currentStepValue,
+        uint256 lastChallengeStepValue,
+        bool challengeActive,
+        address currentPrimaryProverAddress,
+        uint256 challengedOrdersCount,
+        uint256[] memory currentChallengedOrderIds,
+        address[] memory secondaryProversList
+    ) {
+        totalChallengeRounds = lastChallengeStep;
+        currentStepValue = currentStep();
+        lastChallengeStepValue = lastChallengeStep;
+        challengeActive = (currentStepValue <= lastChallengeStep + 1) && (lastChallengeStep > 0);
+        currentPrimaryProverAddress = currentPrimaryProver;
+        challengedOrdersCount = currentChallengedOrders.length;
+        currentChallengedOrderIds = currentChallengedOrders;
+        secondaryProversList = currentSecondaryProvers;
+    }
+    
+    /// @notice Get financial overview for the marketplace
+    function getFinancialStats() external view returns (
+        uint256 totalContractBalance,
+        uint256 totalEscrowHeld,
+        uint256 totalRewardsPaid,
+        uint256 averageOrderValue,
+        uint256 totalStakeValue
+    ) {
+        totalContractBalance = address(this).balance;
+        
+        // Calculate total escrow and rewards paid
+        for (uint256 i = 1; i < nextOrderId; i++) {
+            if (orders[i].owner != address(0)) {
+                totalEscrowHeld += orders[i].escrow - orderEscrowWithdrawn[i];
+                totalRewardsPaid += orderEscrowWithdrawn[i];
+            }
+        }
+        
+        uint256 totalOrders = nextOrderId - 1;
+        averageOrderValue = totalOrders > 0 ? (totalEscrowHeld + totalRewardsPaid) / totalOrders : 0;
+        
+        (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
+        totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();
+    }
+    
+    /// @notice Get order details by ID for dashboard
+    function getOrderDetails(uint256 _orderId) external view returns (
+        address,
+        string memory,
+        uint256,
+        uint64,
+        uint16,
+        uint8,
+        uint8,
+        uint256,
+        uint256,
+        uint64,
+        bool,
+        address[] memory
+    ) {
+        require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
+        FileOrder storage order = orders[_orderId];
+        return (
+            order.owner,
+            order.file.uri,
+            order.file.root,
+            order.maxSize,
+            order.periods,
+            order.replicas,
+            order.filled,
+            order.escrow,
+            orderEscrowWithdrawn[_orderId],
+            order.startPeriod,
+            isOrderExpired(_orderId),
+            orderToNodes[_orderId]
+        );
     }
 }

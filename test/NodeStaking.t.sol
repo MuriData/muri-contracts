@@ -39,9 +39,9 @@ contract NodeStakingTest is Test {
         emit NodeStaked(node1, requiredStake, capacity);
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
-        (uint256 stake, uint64 nodeCapacity, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 nodeCapacity, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, requiredStake);
         assertEq(nodeCapacity, capacity);
         assertEq(used, 0);
@@ -53,7 +53,7 @@ contract NodeStakingTest is Test {
 
         vm.prank(node1);
         vm.expectRevert("incorrect stake amount");
-        nodeStaking.stakeNode{value: requiredStake - 1}(capacity);
+        nodeStaking.stakeNode{value: requiredStake - 1}(capacity, 0x1234, 0x5678);
     }
 
     function test_StakeNode_RevertExcessiveStake() public {
@@ -62,13 +62,13 @@ contract NodeStakingTest is Test {
 
         vm.prank(node1);
         vm.expectRevert("incorrect stake amount");
-        nodeStaking.stakeNode{value: requiredStake + 1}(capacity);
+        nodeStaking.stakeNode{value: requiredStake + 1}(capacity, 0x1234, 0x5678);
     }
 
     function test_StakeNode_RevertCapacityTooLow() public {
         vm.prank(node1);
         vm.expectRevert("capacity too low");
-        nodeStaking.stakeNode{value: 0}(0);
+        nodeStaking.stakeNode{value: 0}(0, 0x1234, 0x5678);
     }
 
     function test_StakeNode_RevertAlreadyStaked() public {
@@ -76,11 +76,11 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         vm.prank(node1);
         vm.expectRevert("already staked");
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
     }
 
     // ===== CAPACITY INCREASE TESTS =====
@@ -91,7 +91,7 @@ contract NodeStakingTest is Test {
         uint256 initialStake = uint256(initialCapacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: initialStake}(initialCapacity);
+        nodeStaking.stakeNode{value: initialStake}(initialCapacity, 0x1234, 0x5678);
 
         // Then increase capacity
         uint64 additionalCapacity = 500;
@@ -103,7 +103,7 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.increaseCapacity{value: additionalStake}(additionalCapacity);
 
-        (uint256 stake, uint64 capacity, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 capacity, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, initialStake + additionalStake);
         assertEq(capacity, initialCapacity + additionalCapacity);
         assertEq(used, 0);
@@ -120,7 +120,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         vm.prank(node1);
         vm.expectRevert("invalid capacity");
@@ -134,7 +134,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         uint64 reduceCapacity = 300;
         uint256 stakeToRelease = uint256(reduceCapacity) * STAKE_PER_BYTE;
@@ -146,7 +146,7 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.decreaseCapacity(reduceCapacity);
 
-        (uint256 stake, uint64 newCapacity, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 newCapacity, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, requiredStake - stakeToRelease);
         assertEq(newCapacity, capacity - reduceCapacity);
         assertEq(used, 0);
@@ -158,7 +158,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         // Simulate some usage
         nodeStaking.updateNodeUsed(node1, 600);
@@ -175,7 +175,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         uint256 initialBalance = node1.balance;
 
@@ -185,7 +185,7 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.unstakeNode();
 
-        (uint256 stake, uint64 nodeCapacity, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 nodeCapacity, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, 0);
         assertEq(nodeCapacity, 0);
         assertEq(used, 0);
@@ -197,7 +197,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         // Simulate some data being stored
         nodeStaking.updateNodeUsed(node1, 100);
@@ -214,7 +214,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         assertTrue(nodeStaking.hasCapacity(node1, 500));
         assertTrue(nodeStaking.hasCapacity(node1, 1000));
@@ -231,11 +231,11 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         nodeStaking.updateNodeUsed(node1, 500);
 
-        (,, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 500);
     }
 
@@ -244,7 +244,7 @@ contract NodeStakingTest is Test {
         uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
         vm.expectRevert("used exceeds capacity");
         nodeStaking.updateNodeUsed(node1, 1001);
@@ -260,9 +260,9 @@ contract NodeStakingTest is Test {
         vm.assume(requiredStake <= 100 ether); // within our test balance
 
         vm.prank(node1);
-        nodeStaking.stakeNode{value: requiredStake}(capacity);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
 
-        (uint256 stake, uint64 nodeCapacity, uint64 used) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 nodeCapacity, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, requiredStake);
         assertEq(nodeCapacity, capacity);
         assertEq(used, 0);
@@ -280,7 +280,7 @@ contract NodeStakingTest is Test {
 
         // Initial stake
         vm.prank(node1);
-        nodeStaking.stakeNode{value: initialStake}(initialCapacity);
+        nodeStaking.stakeNode{value: initialStake}(initialCapacity, 0x1234, 0x5678);
 
         // Increase capacity
         vm.prank(node1);
@@ -291,7 +291,7 @@ contract NodeStakingTest is Test {
             vm.prank(node1);
             nodeStaking.decreaseCapacity(decreaseBy);
 
-            (uint256 finalStake, uint64 finalCapacity,) = nodeStaking.getNodeInfo(node1);
+            (uint256 finalStake, uint64 finalCapacity,,,) = nodeStaking.getNodeInfo(node1);
             assertEq(finalCapacity, initialCapacity + increaseBy - decreaseBy);
             assertEq(finalStake, (initialStake + additionalStake) - (uint256(decreaseBy) * STAKE_PER_BYTE));
         }
@@ -329,7 +329,7 @@ contract MaliciousReentrancy {
     }
 
     function stakeNormally(uint64 capacity) external payable {
-        nodeStaking.stakeNode{value: msg.value}(capacity);
+        nodeStaking.stakeNode{value: msg.value}(capacity, 0x1234, 0x5678);
     }
 
     function attackUnstake() external {

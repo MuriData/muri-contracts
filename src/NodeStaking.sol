@@ -24,6 +24,7 @@ contract NodeStaking {
     }
 
     mapping(address => NodeInfo) public nodes;
+    address[] public nodeList; // List of all registered node addresses
     uint256 public constant STAKE_PER_BYTE = 10 ** 14; // configurable
 
     // ------------------------------------------------------------------
@@ -71,6 +72,9 @@ contract NodeStaking {
         info.used = 0;
         info.publicKeyX = _publicKeyX;
         info.publicKeyY = _publicKeyY;
+        
+        // Add to node list for tracking
+        nodeList.push(msg.sender);
 
         emit NodeStaked(msg.sender, requiredStake, _capacity);
     }
@@ -167,7 +171,7 @@ contract NodeStaking {
     /// @notice Returns whether a node is currently valid (has available capacity).
     function isValidNode(address node) public view returns (bool) {
         NodeInfo storage info = nodes[node];
-        return info.capacity > info.used; // also implies capacity > 0
+        return info.capacity > 0;
     }
 
     /// @notice Slash a node's stake and reduce capacity accordingly
@@ -267,6 +271,25 @@ contract NodeStaking {
             }
             remainingStake -= additionalSlash;
             newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
+        }
+    }
+    
+    /// @notice Get network-wide statistics for monitoring
+    function getNetworkStats() external view returns (
+        uint256 totalNodes,
+        uint256 totalCapacityStaked,
+        uint256 totalCapacityUsed
+    ) {
+        // Note: This is a simplified O(n) implementation
+        // In production, you'd want to maintain these counters incrementally
+        for (uint256 i = 0; i < nodeList.length; i++) {
+            address nodeAddr = nodeList[i];
+            NodeInfo storage info = nodes[nodeAddr];
+            if (info.capacity > 0) {
+                totalNodes++;
+                totalCapacityStaked += info.capacity;
+                totalCapacityUsed += info.used;
+            }
         }
     }
 }
