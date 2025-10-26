@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 contract NodeStaking {
     // The only contract authorized to update node usage.
     address public immutable market;
+    address payable public constant BURN_ADDRESS = payable(address(0));
 
     constructor(address _market) {
         require(_market != address(0), "invalid market");
@@ -60,7 +61,7 @@ contract NodeStaking {
     function stakeNode(uint64 _capacity, uint256 _publicKeyX, uint256 _publicKeyY) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
         require(_publicKeyX != 0 && _publicKeyY != 0, "invalid public key");
-        
+
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
 
@@ -72,7 +73,7 @@ contract NodeStaking {
         info.used = 0;
         info.publicKeyX = _publicKeyX;
         info.publicKeyY = _publicKeyY;
-        
+
         // Add to node list for tracking
         nodeList.push(msg.sender);
 
@@ -138,13 +139,11 @@ contract NodeStaking {
     /// @return used The currently used capacity in bytes
     /// @return publicKeyX The node's public key X coordinate
     /// @return publicKeyY The node's public key Y coordinate
-    function getNodeInfo(address node) external view returns (
-        uint256 stake, 
-        uint64 capacity, 
-        uint64 used,
-        uint256 publicKeyX,
-        uint256 publicKeyY
-    ) {
+    function getNodeInfo(address node)
+        external
+        view
+        returns (uint256 stake, uint64 capacity, uint64 used, uint256 publicKeyX, uint256 publicKeyY)
+    {
         NodeInfo storage info = nodes[node];
         return (info.stake, info.capacity, info.used, info.publicKeyX, info.publicKeyY);
     }
@@ -178,7 +177,12 @@ contract NodeStaking {
     /// @param node The address of the node to slash
     /// @param slashAmount The amount of stake to slash (in wei)
     /// @return forcedOrderExit True if the capacity reduction forced order exits
-    function slashNode(address node, uint256 slashAmount) external onlyMarket nonReentrant returns (bool forcedOrderExit) {
+    function slashNode(address node, uint256 slashAmount)
+        external
+        onlyMarket
+        nonReentrant
+        returns (bool forcedOrderExit)
+    {
         NodeInfo storage info = nodes[node];
         require(info.capacity > 0, "not a node");
         require(slashAmount > 0, "invalid slash amount");
@@ -186,29 +190,29 @@ contract NodeStaking {
 
         // Reduce stake
         info.stake -= slashAmount;
-        
+
         // Calculate new capacity based on reduced stake
         uint64 newCapacity = uint64(info.stake / STAKE_PER_BYTE);
-        
+
         // Check if capacity reduction forces order exits
         forcedOrderExit = newCapacity < info.used;
-        
+
         if (forcedOrderExit) {
             // Severe slashing: additional penalty for forced order exits
             uint256 additionalSlash = slashAmount / 2; // 50% additional penalty
             if (additionalSlash > info.stake) {
                 additionalSlash = info.stake;
             }
-            
+
             if (additionalSlash > 0) {
                 info.stake -= additionalSlash;
                 newCapacity = uint64(info.stake / STAKE_PER_BYTE);
             }
-            
+
             // Set used capacity to new capacity (will be updated by market when orders are quit)
             info.used = newCapacity;
             info.capacity = newCapacity;
-            
+
             emit ForcedOrderExit(node, new uint256[](0), additionalSlash); // Market will populate order IDs
         } else {
             // Normal capacity reduction
@@ -218,11 +222,11 @@ contract NodeStaking {
         // Send slashed amount to market contract (could be redistributed or burned)
         uint256 totalSlashed = slashAmount + (forcedOrderExit ? (slashAmount <= info.stake ? slashAmount / 2 : 0) : 0);
         if (totalSlashed > 0) {
-            payable(market).transfer(totalSlashed);
+            BURN_ADDRESS.transfer(totalSlashed);
         }
 
         emit NodeSlashed(node, slashAmount, newCapacity, forcedOrderExit);
-        
+
         return forcedOrderExit;
     }
 
@@ -242,11 +246,11 @@ contract NodeStaking {
     function getMaxSlashable(address node) external view returns (uint256 maxSlashable) {
         NodeInfo storage info = nodes[node];
         if (info.capacity == 0) return 0;
-        
+
         // Ensure node retains enough stake for currently used capacity
         uint256 requiredStakeForUsed = uint256(info.used) * STAKE_PER_BYTE;
         if (info.stake <= requiredStakeForUsed) return 0;
-        
+
         return info.stake - requiredStakeForUsed;
     }
 
@@ -255,14 +259,18 @@ contract NodeStaking {
     /// @param slashAmount The proposed slash amount
     /// @return newCapacity The resulting capacity after slash
     /// @return willForceExit True if this slash would force order exits
-    function simulateSlash(address node, uint256 slashAmount) external view returns (uint64 newCapacity, bool willForceExit) {
+    function simulateSlash(address node, uint256 slashAmount)
+        external
+        view
+        returns (uint64 newCapacity, bool willForceExit)
+    {
         NodeInfo storage info = nodes[node];
         if (info.capacity == 0 || slashAmount > info.stake) return (0, false);
-        
+
         uint256 remainingStake = info.stake - slashAmount;
         newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
         willForceExit = newCapacity < info.used;
-        
+
         if (willForceExit) {
             // Account for additional slash penalty
             uint256 additionalSlash = slashAmount / 2;
@@ -273,13 +281,13 @@ contract NodeStaking {
             newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
         }
     }
-    
+
     /// @notice Get network-wide statistics for monitoring
-    function getNetworkStats() external view returns (
-        uint256 totalNodes,
-        uint256 totalCapacityStaked,
-        uint256 totalCapacityUsed
-    ) {
+    function getNetworkStats()
+        external
+        view
+        returns (uint256 totalNodes, uint256 totalCapacityStaked, uint256 totalCapacityUsed)
+    {
         // Note: This is a simplified O(n) implementation
         // In production, you'd want to maintain these counters incrementally
         for (uint256 i = 0; i < nodeList.length; i++) {

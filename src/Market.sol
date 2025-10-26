@@ -102,11 +102,11 @@ contract FileMarket {
     mapping(address => uint256) public nodeWithdrawn; // total amount withdrawn
     mapping(address => uint256) public nodeLastClaimPeriod; // last period when rewards were claimed
     mapping(address => mapping(uint256 => uint256)) public nodeOrderStartPeriod; // node -> orderId -> period when started storing
-    
+
     // Escrow tracking for proper payment distribution
     mapping(uint256 => uint256) public orderEscrowWithdrawn; // orderId -> amount already paid to nodes
     mapping(uint256 => mapping(address => uint256)) public nodeOrderEarnings; // orderId -> node -> earned amount
-    
+
     // Proof system - stateless rolling challenges
     uint256 public currentRandomness; // current heartbeat randomness
     uint256 public lastChallengeStep; // last step when challenge was issued
@@ -114,7 +114,7 @@ contract FileMarket {
     address[] public currentSecondaryProvers; // current secondary provers
     uint256[] public currentChallengedOrders; // current orders being challenged
     uint256 public constant CHALLENGE_COUNT = 5; // orders to challenge per heartbeat
-    
+
     // Proof submission tracking (reset each heartbeat)
     mapping(address => bool) public proofSubmitted; // current round proof submissions
     mapping(address => uint256) public nodeToProveOrderId; // node -> order they're proving (current challenge)
@@ -132,7 +132,9 @@ contract FileMarket {
     event ForcedOrderExits(address indexed node, uint256[] orderIds, uint64 totalFreed);
     event RewardsCalculated(address indexed node, uint256 amount, uint256 periods);
     event RewardsClaimed(address indexed node, uint256 amount);
-    event ChallengeIssued(uint256 randomness, address primaryProver, address[] secondaryProvers, uint256[] orderIds, uint256 challengeStep);
+    event ChallengeIssued(
+        uint256 randomness, address primaryProver, address[] secondaryProvers, uint256[] orderIds, uint256 challengeStep
+    );
     event ProofSubmitted(address indexed prover, bool isPrimary, bytes32 commitment);
     event PrimaryProverFailed(address indexed primaryProver, address indexed reporter, uint256 newRandomness);
     event HeartbeatTriggered(uint256 newRandomness, uint256 step);
@@ -182,7 +184,7 @@ contract FileMarket {
     // Node executes an order (claims a replica slot)
     function executeOrder(uint256 _orderId) external {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
-        
+
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order expired");
@@ -216,33 +218,33 @@ contract FileMarket {
     function _removeFromActiveOrders(uint256 _orderId) internal {
         uint256 index = orderIndexInActive[_orderId];
         uint256 lastIndex = activeOrders.length - 1;
-        
+
         if (index != lastIndex) {
             uint256 lastOrderId = activeOrders[lastIndex];
             activeOrders[index] = lastOrderId;
             orderIndexInActive[lastOrderId] = index;
         }
-        
+
         activeOrders.pop();
         delete orderIndexInActive[_orderId];
     }
 
     // Random order selection function
-    function selectRandomOrders(uint256 _randomSeed, uint256 _count) 
-        public 
-        view 
-        returns (uint256[] memory selectedOrders) 
+    function selectRandomOrders(uint256 _randomSeed, uint256 _count)
+        public
+        view
+        returns (uint256[] memory selectedOrders)
     {
         require(_count > 0, "count must be positive");
-        
+
         uint256 totalActive = activeOrders.length;
         if (totalActive == 0) {
             return new uint256[](0);
         }
-        
+
         uint256 actualCount = _count > totalActive ? totalActive : _count;
         selectedOrders = new uint256[](actualCount);
-        
+
         if (actualCount == totalActive) {
             // If requesting all orders, return them all
             for (uint256 i = 0; i < totalActive; i++) {
@@ -254,17 +256,16 @@ contract FileMarket {
             for (uint256 i = 0; i < totalActive; i++) {
                 indices[i] = i;
             }
-            
+
             for (uint256 i = 0; i < actualCount; i++) {
                 uint256 randomIndex = uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (totalActive - i);
                 selectedOrders[i] = activeOrders[indices[randomIndex]];
-                
+
                 // Swap the selected index with the last unselected one
                 indices[randomIndex] = indices[totalActive - 1 - i];
             }
         }
     }
-
 
     // Get active orders count
     function getActiveOrdersCount() external view returns (uint256) {
@@ -326,7 +327,7 @@ contract FileMarket {
         require(!isOrderExpired(_orderId), "order already expired");
 
         uint256 settlePeriod = currentPeriod();
-        ( , uint256 assignmentCount) = _settleAndReleaseNodes(order, _orderId, settlePeriod);
+        (, uint256 assignmentCount) = _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Clean up order data
         uint256 remainingEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
@@ -367,10 +368,10 @@ contract FileMarket {
 
         // Calculate slash amount (equivalent to 1 period of storage cost)
         uint256 slashAmount = uint256(order.maxSize) * order.price;
-        
+
         // Apply slash to node's stake
         bool forcedOrderExit = nodeStaking.slashNode(msg.sender, slashAmount);
-        
+
         // If slashing caused forced order exits, handle them
         if (forcedOrderExit) {
             _handleForcedOrderExits(msg.sender);
@@ -383,15 +384,19 @@ contract FileMarket {
     }
 
     // External slashing function (for challenges/penalties)
-    function slashNode(address _node, uint256 _slashAmount, string calldata _reason) external onlySlashAuthority nonReentrant {
+    function slashNode(address _node, uint256 _slashAmount, string calldata _reason)
+        external
+        onlySlashAuthority
+        nonReentrant
+    {
         require(_slashAmount > 0, "invalid slash amount");
-        
+
         bool forcedOrderExit = nodeStaking.slashNode(_node, _slashAmount);
-        
+
         if (forcedOrderExit) {
             _handleForcedOrderExits(_node);
         }
-        
+
         emit NodeSlashed(_node, _slashAmount, _reason);
     }
 
@@ -400,7 +405,7 @@ contract FileMarket {
         uint256[] storage nodeOrders = nodeToOrders[_node];
         uint256[] memory exitedOrders = new uint256[](nodeOrders.length);
         uint256 exitCount = 0;
-        
+
         // Get node's new capacity and previous usage after slashing
         (, uint64 newCapacity, uint64 usedBefore,,) = nodeStaking.getNodeInfo(_node);
         uint64 totalFreed = 0;
@@ -411,21 +416,17 @@ contract FileMarket {
         while (i > 0) {
             i--;
             uint256 exitOrderId = nodeOrders[i];
-            uint64 freed = _removeAssignmentDuringForcedExit(
-                _node,
-                exitOrderId,
-                settlePeriod
-            );
+            uint64 freed = _removeAssignmentDuringForcedExit(_node, exitOrderId, settlePeriod);
 
             if (freed > 0) {
                 totalFreed += freed;
                 exitedOrders[exitCount++] = exitOrderId;
             }
         }
-        
+
         // Clear node's order list
         delete nodeToOrders[_node];
-        
+
         uint64 newUsed = usedBefore > totalFreed ? usedBefore - totalFreed : 0;
         if (newUsed > newCapacity) {
             newUsed = newCapacity;
@@ -433,21 +434,20 @@ contract FileMarket {
 
         // Update node's used capacity to match the data that remains
         nodeStaking.forceReduceUsed(_node, newUsed);
-        
+
         // Resize the exited orders array to actual count
         uint256[] memory actualExitedOrders = new uint256[](exitCount);
         for (uint256 idx = 0; idx < exitCount; idx++) {
             actualExitedOrders[idx] = exitedOrders[idx];
         }
-        
+
         emit ForcedOrderExits(_node, actualExitedOrders, totalFreed);
     }
 
-    function _removeAssignmentDuringForcedExit(
-        address _node,
-        uint256 _orderId,
-        uint256 _settlePeriod
-    ) internal returns (uint64 freed) {
+    function _removeAssignmentDuringForcedExit(address _node, uint256 _orderId, uint256 _settlePeriod)
+        internal
+        returns (uint64 freed)
+    {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) {
             return 0;
@@ -486,7 +486,7 @@ contract FileMarket {
             nodePendingRewards[_node] += settledReward;
         }
         delete nodeOrderStartPeriod[_node][_orderId];
-        
+
         // Remove node from order assignments
         if (_nodeIndex != assignedNodes.length - 1) {
             assignedNodes[_nodeIndex] = assignedNodes[assignedNodes.length - 1];
@@ -516,11 +516,10 @@ contract FileMarket {
         }
     }
 
-    function _settleAndReleaseNodes(
-        FileOrder storage order,
-        uint256 _orderId,
-        uint256 _settlePeriod
-    ) internal returns (uint256 totalSettled, uint256 initialAssignments) {
+    function _settleAndReleaseNodes(FileOrder storage order, uint256 _orderId, uint256 _settlePeriod)
+        internal
+        returns (uint256 totalSettled, uint256 initialAssignments)
+    {
         address[] storage assignedNodes = orderToNodes[_orderId];
         initialAssignments = assignedNodes.length;
         while (assignedNodes.length > 0) {
@@ -546,7 +545,7 @@ contract FileMarket {
     // Get order details including expiration status
 
     // Node reward system
-    
+
     /// @notice Calculate and claim accumulated rewards for a node from order escrows
     function claimRewards() external nonReentrant {
         address node = msg.sender;
@@ -601,11 +600,11 @@ contract FileMarket {
     }
 
     /// @notice Calculate claimable earnings for a node/order pair up to a target period
-    function _calculateOrderClaimableUpTo(
-        address _node,
-        uint256 _orderId,
-        uint256 _settlePeriod
-    ) internal view returns (uint256) {
+    function _calculateOrderClaimableUpTo(address _node, uint256 _orderId, uint256 _settlePeriod)
+        internal
+        view
+        returns (uint256)
+    {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return 0;
 
@@ -626,11 +625,10 @@ contract FileMarket {
     }
 
     /// @notice Apply reward settlement for a node/order pair and return the credited amount
-    function _settleOrderReward(
-        address _node,
-        uint256 _orderId,
-        uint256 _settlePeriod
-    ) internal returns (uint256 claimableFromOrder) {
+    function _settleOrderReward(address _node, uint256 _orderId, uint256 _settlePeriod)
+        internal
+        returns (uint256 claimableFromOrder)
+    {
         claimableFromOrder = _calculateOrderClaimableUpTo(_node, _orderId, _settlePeriod);
         if (claimableFromOrder == 0) {
             return 0;
@@ -640,18 +638,15 @@ contract FileMarket {
         orderEscrowWithdrawn[_orderId] += claimableFromOrder;
         nodeEarnings[_node] += claimableFromOrder;
     }
-    
+
     /// @notice Submit proof for current challenge
-    function submitProof(
-        uint256[8] calldata _proof, 
-        bytes32 _commitment
-    ) external {
+    function submitProof(uint256[8] calldata _proof, bytes32 _commitment) external {
         require(currentStep() > lastChallengeStep, "no active challenge");
         require(currentStep() <= lastChallengeStep + 1, "challenge period expired");
-        
+
         bool isPrimary = (msg.sender == currentPrimaryProver);
         bool isSecondary = false;
-        
+
         // Check if sender is a secondary prover
         for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
             if (currentSecondaryProvers[i] == msg.sender) {
@@ -659,127 +654,117 @@ contract FileMarket {
                 break;
             }
         }
-        
+
         require(isPrimary || isSecondary, "not a challenged prover");
         require(!proofSubmitted[msg.sender], "proof already submitted");
-        
+
         // Get the order this node should prove (set during challenge assignment)
         uint256 proverOrderId = nodeToProveOrderId[msg.sender];
         require(proverOrderId != 0, "no order assigned to node");
-        
+
         // Get file root hash from the order
         FileOrder storage order = orders[proverOrderId];
         uint256 fileRootHash = order.file.root;
-        
+
         // Get node's public key from NodeStaking contract
         (,,, uint256 publicKeyX, uint256 publicKeyY) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKeyX != 0 && publicKeyY != 0, "node public key not set");
-        
+
         // Prepare public inputs for POI verifier: [randomness, rootHash, commitment, publicKeyX, publicKeyY]
-        uint256[5] memory publicInputs = [
-            currentRandomness,
-            fileRootHash,
-            uint256(_commitment),
-            publicKeyX,
-            publicKeyY
-        ];
-        
+        uint256[5] memory publicInputs = [currentRandomness, fileRootHash, uint256(_commitment), publicKeyX, publicKeyY];
+
         // Verify proof using POI verifier - reverts on invalid proof
         poiVerifier.verifyProof(_proof, publicInputs);
-        
+
         proofSubmitted[msg.sender] = true;
-        
+
         if (isPrimary) {
             primaryProofReceived = true;
             // Primary prover's commitment becomes next randomness
             currentRandomness = uint256(_commitment);
             _triggerNewHeartbeat();
         }
-        
+
         emit ProofSubmitted(msg.sender, isPrimary, _commitment);
     }
-    
+
     /// @notice Report primary prover failure (callable after STEP period)
     function reportPrimaryFailure() external nonReentrant {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
         require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
         require(!primaryProofReceived, "primary proof was submitted");
         require(!primaryFailureReported, "primary failure already reported");
-        
+
         // Mark failure as reported to prevent duplicate reports
         primaryFailureReported = true;
-        
+
         // Slash primary prover severely
         address primaryProver = currentPrimaryProver;
         uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
-        
+
         bool forcedExit = nodeStaking.slashNode(primaryProver, severeSlashAmount);
         if (forcedExit) {
             _handleForcedOrderExits(primaryProver);
         }
-        
+
         // Generate fallback randomness using reporter's signature and block data
-        uint256 fallbackRandomness = uint256(keccak256(abi.encodePacked(
-            msg.sender, 
-            block.timestamp, 
-            block.prevrandao,
-            currentRandomness
-        )));
-        
+        uint256 fallbackRandomness =
+            uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)));
+
         currentRandomness = fallbackRandomness;
         _triggerNewHeartbeat();
-        
+
         emit PrimaryProverFailed(primaryProver, msg.sender, fallbackRandomness);
     }
-    
+
     /// @notice Check and slash secondary provers who failed to submit proofs
     function slashSecondaryFailures() external nonReentrant {
         require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
         require(!secondarySlashProcessed, "secondary slash settled");
         secondarySlashProcessed = true;
-        
+
         for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
             address secondaryProver = currentSecondaryProvers[i];
             if (!proofSubmitted[secondaryProver]) {
                 // Normal slashing for secondary provers
                 uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
-                
+
                 bool forcedExit = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
                 if (forcedExit) {
                     _handleForcedOrderExits(secondaryProver);
                 }
-                
+
                 emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
                 proofSubmitted[secondaryProver] = true;
             }
         }
     }
-    
+
     /// @notice Trigger new heartbeat with challenge selection
     function _triggerNewHeartbeat() internal {
         uint256 currentStep_ = currentStep();
-        
+
         // Reset proof tracking
         _resetProofTracking();
-        
+
         // Select random orders for challenge
         uint256[] memory selectedOrders = selectRandomOrders(currentRandomness, CHALLENGE_COUNT);
-        
+
         if (selectedOrders.length == 0) {
             lastChallengeStep = currentStep_;
             emit HeartbeatTriggered(currentRandomness, currentStep_);
             return;
         }
-        
+
         // Set up new challenge
         currentChallengedOrders = selectedOrders;
-        
+
         // Primary prover is from first order's first node
         address[] storage firstOrderNodes = orderToNodes[selectedOrders[0]];
         require(firstOrderNodes.length > 0, "no nodes for first order");
         currentPrimaryProver = firstOrderNodes[0];
         nodeToProveOrderId[currentPrimaryProver] = selectedOrders[0];
-        
+
         // Reset secondary provers array length to 0 (more efficient than delete)
         uint256 secondaryCount = 0;
         if (currentSecondaryProvers.length > 0) {
@@ -787,7 +772,7 @@ contract FileMarket {
                 sstore(currentSecondaryProvers.slot, 0)
             }
         }
-        
+
         // Assign secondary provers from other orders
         for (uint256 i = 1; i < selectedOrders.length; i++) {
             address[] storage orderNodes = orderToNodes[selectedOrders[i]];
@@ -798,32 +783,28 @@ contract FileMarket {
                 secondaryCount++;
             }
         }
-        
+
         lastChallengeStep = currentStep_;
-        
+
         emit ChallengeIssued(
-            currentRandomness,
-            currentPrimaryProver,
-            currentSecondaryProvers,
-            selectedOrders,
-            currentStep_
+            currentRandomness, currentPrimaryProver, currentSecondaryProvers, selectedOrders, currentStep_
         );
         emit HeartbeatTriggered(currentRandomness, currentStep_);
     }
-    
+
     /// @notice Reset proof submission tracking for new challenge
     function _resetProofTracking() internal {
         // Reset primary prover proof status
         primaryProofReceived = false;
         primaryFailureReported = false;
         secondarySlashProcessed = false;
-        
+
         // Reset primary prover submission and order assignment
         if (currentPrimaryProver != address(0)) {
             proofSubmitted[currentPrimaryProver] = false;
             nodeToProveOrderId[currentPrimaryProver] = 0;
         }
-        
+
         // Reset secondary provers submissions and order assignments
         for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
             address secondaryNode = currentSecondaryProvers[i];
@@ -831,12 +812,12 @@ contract FileMarket {
             nodeToProveOrderId[secondaryNode] = 0;
         }
     }
-    
+
     /// @notice Cleanup expired orders automatically
     function _cleanupExpiredOrders() internal {
         uint256 batchSize = 10; // Process up to 10 orders per heartbeat to avoid gas limits
         uint256 processed = 0;
-        
+
         for (uint256 i = 0; i < activeOrders.length && processed < batchSize; i++) {
             uint256 activeOrderId = activeOrders[i];
             if (isOrderExpired(activeOrderId)) {
@@ -849,29 +830,22 @@ contract FileMarket {
 
     /// @notice Manual heartbeat trigger (can be called by anyone if no challenge active)
     function triggerHeartbeat() external nonReentrant {
-        require(
-            currentStep() > lastChallengeStep + 1 || lastChallengeStep == 0,
-            "challenge still active"
-        );
-        
+        require(currentStep() > lastChallengeStep + 1 || lastChallengeStep == 0, "challenge still active");
+
         // If no randomness set, initialize with block data
         if (currentRandomness == 0) {
-            currentRandomness = uint256(keccak256(abi.encodePacked(
-                block.timestamp,
-                block.prevrandao,
-                msg.sender
-            )));
+            currentRandomness = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender)));
         }
-        
+
         _triggerNewHeartbeat();
         _cleanupExpiredOrders();
     }
-    
+
     /// @notice Internal version of completeExpiredOrder for heartbeat use
     function _completeExpiredOrderInternal(uint256 _orderId) internal {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return; // Already completed
-        
+
         uint256 settlePeriod = order.startPeriod + order.periods;
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
@@ -882,21 +856,20 @@ contract FileMarket {
 
         delete orders[_orderId];
         delete orderToNodes[_orderId];
-        
+
         if (refundAmount > 0) {
             payable(orderOwner).transfer(refundAmount);
         }
-        
+
         emit OrderCompleted(_orderId);
     }
-    
+
     /// @notice Get node earnings info
-    function getNodeEarningsInfo(address _node) external view returns (
-        uint256 totalEarned,
-        uint256 withdrawn,
-        uint256 claimable,
-        uint256 lastClaimPeriod
-    ) {
+    function getNodeEarningsInfo(address _node)
+        external
+        view
+        returns (uint256 totalEarned, uint256 withdrawn, uint256 claimable, uint256 lastClaimPeriod)
+    {
         totalEarned = nodeEarnings[_node];
         withdrawn = nodeWithdrawn[_node];
         claimable = this.getClaimableRewards(_node);
@@ -904,15 +877,19 @@ contract FileMarket {
     }
 
     /// @notice Get current challenge info
-    function getCurrentChallengeInfo() external view returns (
-        uint256 randomness,
-        uint256 challengeStep,
-        address primaryProver,
-        address[] memory secondaryProvers,
-        uint256[] memory challengedOrders,
-        bool primarySubmitted,
-        bool challengeActive
-    ) {
+    function getCurrentChallengeInfo()
+        external
+        view
+        returns (
+            uint256 randomness,
+            uint256 challengeStep,
+            address primaryProver,
+            address[] memory secondaryProvers,
+            uint256[] memory challengedOrders,
+            bool primarySubmitted,
+            bool challengeActive
+        )
+    {
         randomness = currentRandomness;
         challengeStep = lastChallengeStep;
         primaryProver = currentPrimaryProver;
@@ -933,11 +910,11 @@ contract FileMarket {
     }
 
     /// @notice Get order escrow info
-    function getOrderEscrowInfo(uint256 _orderId) external view returns (
-        uint256 totalEscrow,
-        uint256 paidToNodes,
-        uint256 remainingEscrow
-    ) {
+    function getOrderEscrowInfo(uint256 _orderId)
+        external
+        view
+        returns (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow)
+    {
         FileOrder storage order = orders[_orderId];
         totalEscrow = order.escrow;
         paidToNodes = orderEscrowWithdrawn[_orderId];
@@ -948,62 +925,78 @@ contract FileMarket {
     function getNodeOrderEarnings(address _node, uint256 _orderId) external view returns (uint256) {
         return nodeOrderEarnings[_orderId][_node];
     }
-    
+
     /// @notice Allow contract to receive ETH from slashed nodes
     receive() external payable {}
-    
+
     // =============================================================================
     // NETWORK MONITORING FUNCTIONS FOR WEB DASHBOARD
     // =============================================================================
-    
+
     /// @notice Get comprehensive global marketplace statistics
-    function getGlobalStats() external view returns (
-        uint256 totalOrders,
-        uint256 activeOrdersCount,
-        uint256 totalEscrowLocked,
-        uint256 totalNodes,
-        uint256 totalCapacityStaked,
-        uint256 totalCapacityUsed,
-        uint256 currentRandomnessValue,
-        uint256 lastHeartbeatStep,
-        uint256 currentPeriod_,
-        uint256 currentStep_
-    ) {
+    function getGlobalStats()
+        external
+        view
+        returns (
+            uint256 totalOrders,
+            uint256 activeOrdersCount,
+            uint256 totalEscrowLocked,
+            uint256 totalNodes,
+            uint256 totalCapacityStaked,
+            uint256 totalCapacityUsed,
+            uint256 currentRandomnessValue,
+            uint256 lastHeartbeatStep,
+            uint256 currentPeriod_,
+            uint256 currentStep_
+        )
+    {
         totalOrders = nextOrderId - 1;
         activeOrdersCount = activeOrders.length;
-        
+
         // Calculate total escrow locked across all active orders
         for (uint256 i = 1; i < nextOrderId; i++) {
             if (orders[i].owner != address(0)) {
                 totalEscrowLocked += orders[i].escrow - orderEscrowWithdrawn[i];
             }
         }
-        
+
         // Get node network statistics
         (totalNodes, totalCapacityStaked, totalCapacityUsed) = nodeStaking.getNetworkStats();
-        
+
         currentRandomnessValue = currentRandomness;
         lastHeartbeatStep = lastChallengeStep;
         currentPeriod_ = currentPeriod();
         currentStep_ = currentStep();
     }
-    
+
     /// @notice Get recent order activity for dashboard
-    function getRecentOrders(uint256 count) external view returns (
-        uint256[] memory orderIds,
-        address[] memory owners,
-        uint64[] memory sizes,
-        uint16[] memory periods,
-        uint8[] memory replicas,
-        uint8[] memory filled,
-        uint256[] memory escrows,
-        bool[] memory isActive
-    ) {
+    function getRecentOrders(uint256 count)
+        external
+        view
+        returns (
+            uint256[] memory orderIds,
+            address[] memory owners,
+            uint64[] memory sizes,
+            uint16[] memory periods,
+            uint8[] memory replicas,
+            uint8[] memory filled,
+            uint256[] memory escrows,
+            bool[] memory isActive
+        )
+    {
         uint256 totalOrders = nextOrderId - 1;
         uint256 returnCount = count > totalOrders ? totalOrders : count;
         if (returnCount == 0) {
-            return (new uint256[](0), new address[](0), new uint64[](0), new uint16[](0), 
-                    new uint8[](0), new uint8[](0), new uint256[](0), new bool[](0));
+            return (
+                new uint256[](0),
+                new address[](0),
+                new uint64[](0),
+                new uint16[](0),
+                new uint8[](0),
+                new uint8[](0),
+                new uint256[](0),
+                new bool[](0)
+            );
         }
 
         orderIds = new uint256[](returnCount);
@@ -1035,18 +1028,22 @@ contract FileMarket {
             }
         }
     }
-    
+
     /// @notice Get proof system health and challenge statistics
-    function getProofSystemStats() external view returns (
-        uint256 totalChallengeRounds,
-        uint256 currentStepValue,
-        uint256 lastChallengeStepValue,
-        bool challengeActive,
-        address currentPrimaryProverAddress,
-        uint256 challengedOrdersCount,
-        uint256[] memory currentChallengedOrderIds,
-        address[] memory secondaryProversList
-    ) {
+    function getProofSystemStats()
+        external
+        view
+        returns (
+            uint256 totalChallengeRounds,
+            uint256 currentStepValue,
+            uint256 lastChallengeStepValue,
+            bool challengeActive,
+            address currentPrimaryProverAddress,
+            uint256 challengedOrdersCount,
+            uint256[] memory currentChallengedOrderIds,
+            address[] memory secondaryProversList
+        )
+    {
         totalChallengeRounds = lastChallengeStep;
         currentStepValue = currentStep();
         lastChallengeStepValue = lastChallengeStep;
@@ -1056,17 +1053,21 @@ contract FileMarket {
         currentChallengedOrderIds = currentChallengedOrders;
         secondaryProversList = currentSecondaryProvers;
     }
-    
+
     /// @notice Get financial overview for the marketplace
-    function getFinancialStats() external view returns (
-        uint256 totalContractBalance,
-        uint256 totalEscrowHeld,
-        uint256 totalRewardsPaid,
-        uint256 averageOrderValue,
-        uint256 totalStakeValue
-    ) {
+    function getFinancialStats()
+        external
+        view
+        returns (
+            uint256 totalContractBalance,
+            uint256 totalEscrowHeld,
+            uint256 totalRewardsPaid,
+            uint256 averageOrderValue,
+            uint256 totalStakeValue
+        )
+    {
         totalContractBalance = address(this).balance;
-        
+
         // Calculate total escrow and rewards paid
         for (uint256 i = 1; i < nextOrderId; i++) {
             if (orders[i].owner != address(0)) {
@@ -1074,29 +1075,33 @@ contract FileMarket {
                 totalRewardsPaid += orderEscrowWithdrawn[i];
             }
         }
-        
+
         uint256 totalOrders = nextOrderId - 1;
         averageOrderValue = totalOrders > 0 ? (totalEscrowHeld + totalRewardsPaid) / totalOrders : 0;
-        
+
         (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
         totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();
     }
-    
+
     /// @notice Get order details by ID for dashboard
-    function getOrderDetails(uint256 _orderId) external view returns (
-        address,
-        string memory,
-        uint256,
-        uint64,
-        uint16,
-        uint8,
-        uint8,
-        uint256,
-        uint256,
-        uint64,
-        bool,
-        address[] memory
-    ) {
+    function getOrderDetails(uint256 _orderId)
+        external
+        view
+        returns (
+            address,
+            string memory,
+            uint256,
+            uint64,
+            uint16,
+            uint8,
+            uint8,
+            uint256,
+            uint256,
+            uint64,
+            bool,
+            address[] memory
+        )
+    {
         require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
         FileOrder storage order = orders[_orderId];
         return (

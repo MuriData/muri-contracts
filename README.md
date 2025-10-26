@@ -53,7 +53,7 @@ The `owner` of `FileMarket` is expected to be a multi-signature account (e.g. a 
 
 - **Escrow accounting** — Order escrow is reduced only when rewards are settled. `_settleAndReleaseNodes` makes sure node earnings are booked before any client refunds, even during cancellations or forced exits.
 - **Reward claims** — Nodes withdraw accrued funds via `claimRewards`. Pending rewards from cancelled/expired orders are tracked per node in `nodePendingRewards` and flushed on claim.
-- **Penalties** — Early cancellation with active replicas burns 10% of the remaining escrow. Slashed stake is transferred to the market contract (future versions can redistribute or burn it).
+- **Penalties** — Early cancellation with active replicas burns 10% of the remaining escrow. All slashed stake is irreversibly burned (sent to `address(0)`), tightening the staking supply and raising the cost of malicious behavior.
 - **Reentrancy protection** — Critical entry points (`placeOrder`, `cancelOrder`, `completeExpiredOrder`, `claimRewards`, `slashNode`, `reportPrimaryFailure`, `slashSecondaryFailures`, `triggerHeartbeat`) all run behind a simple non-reentrancy guard to protect settlement logic.
 
 ---

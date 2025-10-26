@@ -16,7 +16,7 @@ contract MarketTest is Test {
     address public node3 = address(0x15);
 
     uint64 public constant TEST_CAPACITY = 1024; // 1KB (smaller for testing)
-    uint256 public constant STAKE_PER_BYTE = 10**14;
+    uint256 public constant STAKE_PER_BYTE = 10 ** 14;
     uint256 public constant TEST_STAKE = uint256(TEST_CAPACITY) * STAKE_PER_BYTE;
     uint256 public constant PERIOD = 7 days;
     uint256 public constant STEP = 30 seconds;
@@ -59,9 +59,8 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, pubKeyX, pubKeyY);
 
         // Verify node info
-        (uint256 stake, uint64 capacity, uint64 used, uint256 keyX, uint256 keyY) = 
-            nodeStaking.getNodeInfo(node1);
-        
+        (uint256 stake, uint64 capacity, uint64 used, uint256 keyX, uint256 keyY) = nodeStaking.getNodeInfo(node1);
+
         assertEq(stake, TEST_STAKE);
         assertEq(capacity, TEST_CAPACITY);
         assertEq(used, 0);
@@ -72,10 +71,7 @@ contract MarketTest is Test {
 
     function test_PlaceOrder() public {
         // Create file metadata
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024; // 1KB
         uint16 periods = 4; // 4 periods
@@ -85,9 +81,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         assertEq(orderId, 1);
         assertEq(market.getActiveOrdersCount(), 1);
@@ -106,10 +100,7 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0x1234, 0x5678);
 
         // Place an order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -118,16 +109,14 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         // Node executes the order
         vm.prank(node1);
         market.executeOrder(orderId);
 
         // Check node's used capacity
-        (, , uint64 used, ,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, maxSize);
 
         // Check node is assigned to order
@@ -144,15 +133,12 @@ contract MarketTest is Test {
         // Register multiple nodes
         vm.prank(node1);
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0x1234, 0x5678);
-        
+
         vm.prank(node2);
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0xabcd, 0xef01);
 
         // Place an order with 2 replicas
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -161,9 +147,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         // First node executes
         vm.prank(node1);
@@ -174,8 +158,8 @@ contract MarketTest is Test {
         market.executeOrder(orderId);
 
         // Check both nodes have used capacity
-        (, , uint64 used1, ,) = nodeStaking.getNodeInfo(node1);
-        (, , uint64 used2, ,) = nodeStaking.getNodeInfo(node2);
+        (,, uint64 used1,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used2,,) = nodeStaking.getNodeInfo(node2);
         assertEq(used1, maxSize);
         assertEq(used2, maxSize);
 
@@ -205,20 +189,17 @@ contract MarketTest is Test {
         // Register nodes with double capacity each
         uint64 largeCapacity = TEST_CAPACITY * 2;
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
-        
+
         vm.deal(node1, largeStake);
         vm.prank(node1);
         nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
-        
+
         vm.deal(node2, largeStake);
         vm.prank(node2);
         nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd, 0xef01);
 
         // Place multiple orders
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -230,10 +211,8 @@ contract MarketTest is Test {
         uint256[] memory orderIds = new uint256[](3);
         for (uint256 i = 0; i < 3; i++) {
             vm.prank(user1);
-            orderIds[i] = market.placeOrder{value: totalCost}(
-                fileMeta, maxSize, periods, replicas, price
-            );
-            
+            orderIds[i] = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+
             // Alternate between nodes
             vm.prank(i % 2 == 0 ? node1 : node2);
             market.executeOrder(orderIds[i]);
@@ -271,10 +250,7 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
 
         // Place order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 1; // Short period for testing
@@ -283,9 +259,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         // Node executes order
         vm.prank(node1);
@@ -302,17 +276,14 @@ contract MarketTest is Test {
         uint256 balanceBefore = node1.balance;
         vm.prank(node1);
         market.claimRewards();
-        
+
         uint256 balanceAfter = node1.balance;
         assertEq(balanceAfter - balanceBefore, totalCost);
     }
 
     function test_OrderCancellation() public {
         // Place order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -321,12 +292,10 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         uint256 balanceBefore = user1.balance;
-        
+
         // Cancel order (no nodes assigned yet, so full refund)
         vm.prank(user1);
         market.cancelOrder(orderId);
@@ -343,10 +312,7 @@ contract MarketTest is Test {
         vm.prank(node1);
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0x1234, 0x5678);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -355,15 +321,13 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         vm.prank(node1);
         market.executeOrder(orderId);
 
         uint256 balanceBefore = user1.balance;
-        
+
         // Cancel order (with penalty due to node storage)
         vm.prank(user1);
         market.cancelOrder(orderId);
@@ -375,10 +339,7 @@ contract MarketTest is Test {
 
     function test_RandomOrderSelection() public {
         // Place multiple orders first
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -389,9 +350,7 @@ contract MarketTest is Test {
         // Place 10 orders
         for (uint256 i = 0; i < 10; i++) {
             vm.prank(user1);
-            market.placeOrder{value: totalCost}(
-                fileMeta, maxSize, periods, replicas, price
-            );
+            market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
         }
 
         assertEq(market.getActiveOrdersCount(), 10);
@@ -423,10 +382,7 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
 
         // Place order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 2;
@@ -435,25 +391,22 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         // Node executes order
         vm.prank(node1);
         market.executeOrder(orderId);
 
         // Check initial escrow state
-        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = 
-            market.getOrderEscrowInfo(orderId);
-        
+        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = market.getOrderEscrowInfo(orderId);
+
         assertEq(totalEscrow, totalCost);
         assertEq(paidToNodes, 0);
         assertEq(remainingEscrow, totalCost);
 
         // Fast forward within the order period and claim rewards
         vm.warp(block.timestamp + 7 days + 1);
-        
+
         vm.prank(node1);
         market.claimRewards();
 
@@ -471,14 +424,15 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: 100 * STAKE_PER_BYTE}(100, 0x1234, 0x5678);
 
         // Try to place large order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: 1 ether}(
-            fileMeta, 1000, 4, 1, 1e12 // 1000 bytes > 100 capacity
+            fileMeta,
+            1000,
+            4,
+            1,
+            1e12 // 1000 bytes > 100 capacity
         );
 
         // This should fail
@@ -496,15 +450,10 @@ contract MarketTest is Test {
 
     function test_RevertWhen_CancelOrderNotOwner() public {
         // User1 places order
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: 1 ether}(
-            fileMeta, 1024, 4, 1, 1e12
-        );
+        uint256 orderId = market.placeOrder{value: 1 ether}(fileMeta, 1024, 4, 1, 1e12);
 
         // User2 tries to cancel (should fail)
         vm.prank(user2);
@@ -527,10 +476,7 @@ contract MarketTest is Test {
     function test_SlashAuthorityForcesExitAndQueuesRewards() public {
         _stakeTestNode(node1, 0x1234, 0x5678);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -539,9 +485,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -572,10 +516,7 @@ contract MarketTest is Test {
     function test_CancelOrderQueuesPendingRewards() public {
         _stakeTestNode(node1, 0x1234, 0x5678);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 1024;
         uint16 periods = 4;
@@ -584,9 +525,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -606,7 +545,9 @@ contract MarketTest is Test {
         uint256 expectedPenalty = expectedRemaining / 10;
         uint256 expectedRefund = expectedRemaining - expectedPenalty;
         uint256 ownerBalanceAfter = user1.balance;
-        assertEq(ownerBalanceAfter - ownerBalanceBefore, expectedRefund, "owner refund accounts for rewards and penalty");
+        assertEq(
+            ownerBalanceAfter - ownerBalanceBefore, expectedRefund, "owner refund accounts for rewards and penalty"
+        );
 
         uint256 nodeBalanceBefore = node1.balance;
         vm.prank(node1);
@@ -619,17 +560,12 @@ contract MarketTest is Test {
     function test_RevertWhen_ExecuteOrderAfterExpiry() public {
         _stakeTestNode(node1, 0x1234, 0x5678);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint16 periods = 1;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: 1 ether}(
-            fileMeta, 1024, periods, 1, 1e12
-        );
+        uint256 orderId = market.placeOrder{value: 1 ether}(fileMeta, 1024, periods, 1, 1e12);
 
         vm.warp(block.timestamp + PERIOD * uint256(periods) + 1);
 
@@ -641,15 +577,10 @@ contract MarketTest is Test {
     function test_RevertWhen_NodeExecutesSameOrderTwice() public {
         _stakeTestNode(node1, 0x1234, 0x5678);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: 1 ether}(
-            fileMeta, 512, 2, 2, 1e12
-        );
+        uint256 orderId = market.placeOrder{value: 1 ether}(fileMeta, 512, 2, 2, 1e12);
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -663,10 +594,7 @@ contract MarketTest is Test {
         _stakeTestNode(node1, 0x1234, 0x5678);
         _stakeTestNode(node2, 0xabcd, 0xef01);
 
-        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({
-            root: FILE_ROOT,
-            uri: FILE_URI
-        });
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
         uint64 maxSize = 256;
         uint16 periods = 2;
@@ -675,16 +603,12 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId1 = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId1 = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
         vm.prank(node1);
         market.executeOrder(orderId1);
 
         vm.prank(user1);
-        uint256 orderId2 = market.placeOrder{value: totalCost}(
-            fileMeta, maxSize, periods, replicas, price
-        );
+        uint256 orderId2 = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
         vm.prank(node2);
         market.executeOrder(orderId2);
 
