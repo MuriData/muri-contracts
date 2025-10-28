@@ -114,6 +114,7 @@ contract FileMarket {
     address[] public currentSecondaryProvers; // current secondary provers
     uint256[] public currentChallengedOrders; // current orders being challenged
     uint256 public constant CHALLENGE_COUNT = 5; // orders to challenge per heartbeat
+    uint256 public constant SECONDARY_ALPHA = 2; // alpha multiplier for secondary provers
 
     // Proof submission tracking (reset each heartbeat)
     mapping(address => bool) public proofSubmitted; // current round proof submissions
@@ -694,12 +695,14 @@ contract FileMarket {
         require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
         require(!primaryProofReceived, "primary proof was submitted");
         require(!primaryFailureReported, "primary failure already reported");
+        require(currentPrimaryProver != address(0), "no primary assigned");
 
         // Mark failure as reported to prevent duplicate reports
         primaryFailureReported = true;
 
         // Slash primary prover severely
         address primaryProver = currentPrimaryProver;
+        require(nodeToProveOrderId[primaryProver] != 0, "primary not assigned to order");
         uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
 
         bool forcedExit = nodeStaking.slashNode(primaryProver, severeSlashAmount);
@@ -726,6 +729,10 @@ contract FileMarket {
         for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
             address secondaryProver = currentSecondaryProvers[i];
             if (!proofSubmitted[secondaryProver]) {
+                // Ensure still assigned to an order for this challenge
+                if (nodeToProveOrderId[secondaryProver] == 0) {
+                    continue;
+                }
                 // Normal slashing for secondary provers
                 uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
 
@@ -747,8 +754,16 @@ contract FileMarket {
         // Reset proof tracking
         _resetProofTracking();
 
-        // Select random orders for challenge
-        uint256[] memory selectedOrders = selectRandomOrders(currentRandomness, CHALLENGE_COUNT);
+        // Determine desired number of secondary provers using alpha * log2(total orders)
+        uint256 totalOrders = nextOrderId - 1;
+        uint256 desiredSecondaryCount = SECONDARY_ALPHA * _log2(totalOrders);
+        uint256 selectionCount = desiredSecondaryCount + 1; // +1 for primary order
+        if (selectionCount == 0) {
+            selectionCount = 1; // ensure we request at least one order
+        }
+
+        // Select random orders for challenge based on dynamic selection count
+        uint256[] memory selectedOrders = selectRandomOrders(currentRandomness, selectionCount);
 
         if (selectedOrders.length == 0) {
             lastChallengeStep = currentStep_;
@@ -759,11 +774,51 @@ contract FileMarket {
         // Set up new challenge
         currentChallengedOrders = selectedOrders;
 
-        // Primary prover is from first order's first node
-        address[] storage firstOrderNodes = orderToNodes[selectedOrders[0]];
-        require(firstOrderNodes.length > 0, "no nodes for first order");
-        currentPrimaryProver = firstOrderNodes[0];
-        nodeToProveOrderId[currentPrimaryProver] = selectedOrders[0];
+        // Select a primary prover: choose a random node from the first order that has at least one node
+        address primary;
+        uint256 primaryOrderId;
+        for (uint256 idx = 0; idx < selectedOrders.length; idx++) {
+            uint256 candidateOrderId = selectedOrders[idx];
+            address[] storage candidateNodes = orderToNodes[candidateOrderId];
+            if (candidateNodes.length == 0) {
+                continue;
+            }
+            uint256 r = uint256(keccak256(abi.encodePacked(currentRandomness, candidateOrderId, idx)));
+            primary = candidateNodes[r % candidateNodes.length];
+            primaryOrderId = candidateOrderId;
+            break;
+        }
+
+        // If no orders had nodes, clear provers, advance randomness, emit heartbeat and exit
+        if (primary == address(0)) {
+            // Clear any stale provers
+            if (currentPrimaryProver != address(0)) {
+                proofSubmitted[currentPrimaryProver] = false;
+                nodeToProveOrderId[currentPrimaryProver] = 0;
+            }
+            if (currentSecondaryProvers.length > 0) {
+                for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
+                    address s = currentSecondaryProvers[i];
+                    proofSubmitted[s] = false;
+                    nodeToProveOrderId[s] = 0;
+                }
+                assembly {
+                    sstore(currentSecondaryProvers.slot, 0)
+                }
+            }
+            currentPrimaryProver = address(0);
+
+            // Advance randomness even without a selection to keep the beacon moving
+            currentRandomness = uint256(
+                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
+            );
+            lastChallengeStep = currentStep_;
+            emit HeartbeatTriggered(currentRandomness, currentStep_);
+            return;
+        }
+
+        currentPrimaryProver = primary;
+        nodeToProveOrderId[currentPrimaryProver] = primaryOrderId;
 
         // Reset secondary provers array length to 0 (more efficient than delete)
         uint256 secondaryCount = 0;
@@ -773,14 +828,22 @@ contract FileMarket {
             }
         }
 
-        // Assign secondary provers from other orders
-        for (uint256 i = 1; i < selectedOrders.length; i++) {
-            address[] storage orderNodes = orderToNodes[selectedOrders[i]];
+        // Assign secondary provers from remaining orders, selecting a random node per order
+        for (uint256 i = 0; i < selectedOrders.length; i++) {
+            uint256 orderId = selectedOrders[i];
+            if (orderId == primaryOrderId) {
+                continue;
+            }
+            address[] storage orderNodes = orderToNodes[orderId];
             if (orderNodes.length > 0) {
-                address secondaryNode = orderNodes[0];
+                uint256 r = uint256(keccak256(abi.encodePacked(currentRandomness, orderId, i)));
+                address secondaryNode = orderNodes[r % orderNodes.length];
                 currentSecondaryProvers.push(secondaryNode);
-                nodeToProveOrderId[secondaryNode] = selectedOrders[i];
+                nodeToProveOrderId[secondaryNode] = orderId;
                 secondaryCount++;
+                if (secondaryCount >= desiredSecondaryCount) {
+                    break;
+                }
             }
         }
 
@@ -790,6 +853,17 @@ contract FileMarket {
             currentRandomness, currentPrimaryProver, currentSecondaryProvers, selectedOrders, currentStep_
         );
         emit HeartbeatTriggered(currentRandomness, currentStep_);
+    }
+
+    // Compute floor(log2(value)); returns 0 for value == 0 or 1
+    function _log2(uint256 value) internal pure returns (uint256 result) {
+        if (value <= 1) {
+            return 0;
+        }
+        while (value > 1) {
+            value >>= 1;
+            result++;
+        }
     }
 
     /// @notice Reset proof submission tracking for new challenge

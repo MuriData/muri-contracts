@@ -43,7 +43,7 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, keyX, keyY);
     }
 
-    function test_BasicMarketDeployment() public {
+    function test_BasicMarketDeployment() public view {
         // Check contract deployment
         assertEq(address(market.nodeStaking()), address(nodeStaking));
         assertEq(market.nextOrderId(), 1);
@@ -227,7 +227,7 @@ contract MarketTest is Test {
             uint256 randomness,
             uint256 challengeStep,
             address primaryProver,
-            address[] memory secondaryProvers,
+            ,
             uint256[] memory challengedOrders,
             bool primarySubmitted,
             bool challengeActive
@@ -622,5 +622,215 @@ contract MarketTest is Test {
 
         vm.expectRevert("secondary slash settled");
         market.slashSecondaryFailures();
+    }
+
+    // -------------------------------------------------------------------------
+    // New edge cases and adversarial tests for heartbeat/challenge updates
+    // -------------------------------------------------------------------------
+
+    function test_Heartbeat_NoSelection_ClearsProversAndAdvancesRandomness() public {
+        // Place an order but do not assign any node
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+
+        uint64 maxSize = 512;
+        uint16 periods = 2;
+        uint8 replicas = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * uint256(replicas) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+
+        // First heartbeat initializes randomness
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+        uint256 r1 = market.currentRandomness();
+        assertTrue(r1 != 0);
+
+        // Next heartbeat should find no nodes to select, clear provers and advance randomness
+        // Must advance beyond the entire challenge window: > lastChallengeStep + 1
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+        market.triggerHeartbeat();
+
+        (
+            ,
+            ,
+            address primaryProver,
+            address[] memory secondaryProvers,
+            ,
+            ,
+            
+        ) = market.getCurrentChallengeInfo();
+
+        uint256 r2 = market.currentRandomness();
+        assertEq(primaryProver, address(0));
+        assertEq(secondaryProvers.length, 0);
+        assertTrue(r2 != r1, "randomness should advance on no-selection");
+    }
+
+    function test_ReportPrimaryFailure_RevertWhen_NoPrimaryAssigned() public {
+        // No nodes assigned → heartbeat selects none and clears primary
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        vm.prank(user1);
+        market.placeOrder{value: 1 ether}(fileMeta, 512, 2, 1, 1e12);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        // Caller must be a valid node
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // Advance beyond challenge period
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+        vm.prank(node1);
+        vm.expectRevert("no primary assigned");
+        market.reportPrimaryFailure();
+    }
+
+    function test_DynamicSecondaryCount_LogScaling() public {
+        // Prepare 8 nodes and 8 orders, each order executed by a distinct node
+        uint64 capacity = TEST_CAPACITY;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 128;
+        uint16 periods = 3;
+        uint8 replicas = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * uint256(replicas) * price;
+
+        address[] memory nodes = new address[](8);
+        for (uint256 i = 0; i < 8; i++) {
+            address n = address(uint160(0x100 + i));
+            nodes[i] = n;
+            vm.deal(n, stake + 1 ether);
+            vm.prank(n);
+            nodeStaking.stakeNode{value: stake}(capacity, 0x1111 + i, 0x2222 + i);
+
+            vm.prank(user1);
+            uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+            vm.prank(n);
+            market.executeOrder(orderId);
+        }
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        (
+            ,
+            ,
+            address primaryProver,
+            address[] memory secondaryProvers,
+            ,
+            ,
+            
+        ) = market.getCurrentChallengeInfo();
+
+        assertTrue(primaryProver != address(0));
+        // totalOrders = 8 → floor(log2(8)) = 3 → desired secondaries = 2 * 3 = 6
+        assertEq(secondaryProvers.length, 6, "secondary count should be 2*log2(totalOrders)");
+    }
+
+    function test_SlashSecondaryFailures_RevertIfCalledTooEarly() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: 1 ether}(fileMeta, 128, 2, 1, 1e12);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        // Before challenge window expires
+        vm.expectRevert("challenge period not expired");
+        market.slashSecondaryFailures();
+    }
+
+    function test_RandomnessAdvances_OnNoSelection_WithNonZeroSeed() public {
+        // Initialize randomness with initial heartbeat without orders
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+        uint256 r1 = market.currentRandomness();
+        assertTrue(r1 != 0);
+
+        // Place order but no nodes, force no-selection path and ensure randomness changes
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        vm.prank(user1);
+        market.placeOrder{value: 1 ether}(fileMeta, 256, 2, 1, 1e12);
+
+        // Must advance beyond the entire challenge window: > lastChallengeStep + 1
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+        market.triggerHeartbeat();
+
+        uint256 r2 = market.currentRandomness();
+        assertTrue(r2 != r1, "randomness should change on no-selection");
+    }
+
+    function test_ClaimRewards_Reverts_When_ReceiverIsContractWithComplexReceive() public {
+        // Malicious node stakes, stores data, and attempts to reenter claimRewards
+        MaliciousMarketClaim attacker = new MaliciousMarketClaim(market);
+        uint64 capacity = TEST_CAPACITY;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.deal(address(attacker), stake + 10 ether);
+
+        // Setup storage via attacker
+        attacker.setupAndStore{value: stake}(capacity, FILE_ROOT, FILE_URI, 512, 1, 1e12);
+
+        // Advance one period to accrue rewards
+        vm.warp(block.timestamp + PERIOD + 1);
+
+        // Attack: claimRewards triggers receive(); transfer(2300 gas) cannot execute complex logic and reverts
+        vm.expectRevert();
+        attacker.attackClaimRewards();
+    }
+}
+
+// Malicious contract to test reentrancy on FileMarket.claimRewards
+contract MaliciousMarketClaim {
+    FileMarket public market;
+    NodeStaking public nodeStaking;
+    bool public attacked = false;
+    bool public reentrancyDetected = false;
+
+    constructor(FileMarket _market) {
+        market = _market;
+        nodeStaking = _market.nodeStaking();
+    }
+
+    function setupAndStore(
+        uint64 capacity,
+        uint256 fileRoot,
+        string memory fileUri,
+        uint64 maxSize,
+        uint16 periods,
+        uint256 price
+    ) external payable {
+        // Stake as node
+        nodeStaking.stakeNode{value: msg.value}(capacity, 0xAAAA, 0xBBBB);
+
+        // Place order
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: fileRoot, uri: fileUri});
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        market.placeOrder{value: totalCost}(meta, maxSize, periods, 1, price);
+
+        // Execute order as this contract
+        market.executeOrder(1);
+    }
+
+    function attackClaimRewards() external {
+        market.claimRewards();
+    }
+
+    receive() external payable {
+        if (!attacked) {
+            attacked = true;
+            // Attempt reentrancy
+            try market.claimRewards() {
+                reentrancyDetected = false;
+            } catch {
+                reentrancyDetected = true;
+            }
+        }
     }
 }
