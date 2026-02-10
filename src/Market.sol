@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {Verifier} from "./utils/poi_verifier.sol";
+import {Verifier} from "muri-artifacts/poi_verifier.sol";
 import {NodeStaking} from "./NodeStaking.sol";
 
 contract FileMarket {
