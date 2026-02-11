@@ -26,7 +26,11 @@ contract NodeStaking {
 
     mapping(address => NodeInfo) public nodes;
     address[] public nodeList; // List of all registered node addresses
+    mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
     uint256 public constant STAKE_PER_BYTE = 10 ** 14; // configurable
+
+    /// @dev BN254 scalar field order (Fr). EdDSA public key coordinates must be valid field elements.
+    uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
     // ------------------------------------------------------------------
     // Reentrancy guard
@@ -60,7 +64,10 @@ contract NodeStaking {
     /// @param _publicKeyY EdDSA public key Y coordinate for proof verification
     function stakeNode(uint64 _capacity, uint256 _publicKeyX, uint256 _publicKeyY) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
-        require(_publicKeyX != 0 && _publicKeyY != 0, "invalid public key");
+        require(
+            _publicKeyX != 0 && _publicKeyX < SNARK_SCALAR_FIELD && _publicKeyY != 0 && _publicKeyY < SNARK_SCALAR_FIELD,
+            "public key not in field"
+        );
 
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
@@ -75,6 +82,7 @@ contract NodeStaking {
         info.publicKeyY = _publicKeyY;
 
         // Add to node list for tracking
+        nodeIndexInList[msg.sender] = nodeList.length;
         nodeList.push(msg.sender);
 
         emit NodeStaked(msg.sender, requiredStake, _capacity);
@@ -125,6 +133,17 @@ contract NodeStaking {
 
         // Remove node info mapping entry entirely
         delete nodes[msg.sender];
+
+        // Remove from nodeList via swap-and-pop
+        uint256 idx = nodeIndexInList[msg.sender];
+        uint256 lastIdx = nodeList.length - 1;
+        if (idx != lastIdx) {
+            address lastNode = nodeList[lastIdx];
+            nodeList[idx] = lastNode;
+            nodeIndexInList[lastNode] = idx;
+        }
+        nodeList.pop();
+        delete nodeIndexInList[msg.sender];
 
         (bool success,) = msg.sender.call{value: stakeToReturn}("");
         require(success, "transfer failed");

@@ -360,7 +360,7 @@ contract NodeStakingTest is Test {
         uint64 capacity = 1000;
         uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
         vm.prank(node1);
-        vm.expectRevert("invalid public key");
+        vm.expectRevert("public key not in field");
         nodeStaking.stakeNode{value: stake}(capacity, 0, 0x5678);
     }
 
@@ -368,8 +368,47 @@ contract NodeStakingTest is Test {
         uint64 capacity = 1000;
         uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
         vm.prank(node1);
-        vm.expectRevert("invalid public key");
+        vm.expectRevert("public key not in field");
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0);
+    }
+
+    function test_StakeNode_RevertPublicKeyXExceedsField() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        // BN254 scalar field order
+        uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+        vm.prank(node1);
+        vm.expectRevert("public key not in field");
+        nodeStaking.stakeNode{value: stake}(capacity, R, 0x5678);
+    }
+
+    function test_StakeNode_RevertPublicKeyYExceedsField() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+        vm.prank(node1);
+        vm.expectRevert("public key not in field");
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, R);
+    }
+
+    function test_StakeNode_RevertPublicKeyMaxUint256() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        vm.expectRevert("public key not in field");
+        nodeStaking.stakeNode{value: stake}(capacity, type(uint256).max, type(uint256).max);
+    }
+
+    function test_StakeNode_AcceptsMaxValidFieldElement() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, R - 1, R - 1);
+
+        (,,, uint256 pkX, uint256 pkY) = nodeStaking.getNodeInfo(node1);
+        assertEq(pkX, R - 1);
+        assertEq(pkY, R - 1);
     }
 
     // ===== DECREASE CAPACITY EDGE CASES =====
@@ -650,6 +689,72 @@ contract NodeStakingTest is Test {
         (uint256 totalNodes, uint256 totalCapStaked,) = nodeStaking.getNetworkStats();
         assertEq(totalNodes, 1, "unstaked node excluded");
         assertEq(totalCapStaked, 1000);
+        // nodeList should actually be shorter now (swap-and-pop removal)
+        assertEq(nodeStaking.nodeList(0), node1, "remaining node in list");
+    }
+
+    // ===== NODE LIST REMOVAL TESTS =====
+
+    function test_UnstakeNode_RemovesFromNodeList() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
+
+        // nodeList should be empty
+        (uint256 totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 0, "nodeList empty after unstake");
+    }
+
+    function test_UnstakeNode_SwapAndPop_MiddleNode() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+
+        // Stake 3 nodes
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1111, 0x2222);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: stake}(cap, 0x3333, 0x4444);
+        vm.prank(node3);
+        nodeStaking.stakeNode{value: stake}(cap, 0x5555, 0x6666);
+
+        // Unstake the middle node (node2 at index 1)
+        vm.prank(node2);
+        nodeStaking.unstakeNode();
+
+        // nodeList should now be [node1, node3] (node3 swapped into index 1)
+        assertEq(nodeStaking.nodeList(0), node1, "node1 still at index 0");
+        assertEq(nodeStaking.nodeList(1), node3, "node3 swapped to index 1");
+        assertEq(nodeStaking.nodeIndexInList(node1), 0, "node1 index correct");
+        assertEq(nodeStaking.nodeIndexInList(node3), 1, "node3 index correct");
+
+        (uint256 totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 2, "two nodes remain");
+    }
+
+    function test_Restake_AfterUnstake() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
+
+        // Re-stake
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0xaaaa, 0xbbbb);
+
+        assertEq(nodeStaking.nodeList(0), node1, "re-staked node in list");
+        assertEq(nodeStaking.nodeIndexInList(node1), 0, "re-staked node index correct");
+
+        (uint256 totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 1, "one node after re-stake");
     }
 
     // ===== ONLY-MARKET ACCESS CONTROL =====
