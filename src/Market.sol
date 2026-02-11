@@ -107,6 +107,16 @@ contract FileMarket {
     mapping(uint256 => uint256) public orderEscrowWithdrawn; // orderId -> amount already paid to nodes
     mapping(uint256 => mapping(address => uint256)) public nodeOrderEarnings; // orderId -> node -> earned amount
 
+    // Reporter reward system for slash redistribution
+    uint256 public reporterRewardBps = 1000; // 10% default (basis points)
+    uint256 public constant MAX_REPORTER_REWARD_BPS = 5000; // cap at 50%
+    mapping(address => uint256) public reporterPendingRewards;
+    mapping(address => uint256) public reporterEarnings;
+    mapping(address => uint256) public reporterWithdrawn;
+    uint256 public totalSlashedReceived;
+    uint256 public totalBurnedFromSlash;
+    uint256 public totalReporterRewards;
+
     // Proof system - stateless rolling challenges
     uint256 public currentRandomness; // current heartbeat randomness
     uint256 public lastChallengeStep; // last step when challenge was issued
@@ -139,6 +149,9 @@ contract FileMarket {
     event ProofSubmitted(address indexed prover, bool isPrimary, bytes32 commitment);
     event PrimaryProverFailed(address indexed primaryProver, address indexed reporter, uint256 newRandomness);
     event HeartbeatTriggered(uint256 newRandomness, uint256 step);
+    event ReporterRewardAccrued(address indexed reporter, uint256 rewardAmount, uint256 slashedAmount);
+    event ReporterRewardsClaimed(address indexed reporter, uint256 amount);
+    event ReporterRewardBpsUpdated(uint256 oldBps, uint256 newBps);
 
     // Place a new file storage order
     function placeOrder(
@@ -370,8 +383,9 @@ contract FileMarket {
         // Calculate slash amount (equivalent to 1 period of storage cost)
         uint256 slashAmount = uint256(order.maxSize) * order.price;
 
-        // Apply slash to node's stake
-        bool forcedOrderExit = nodeStaking.slashNode(msg.sender, slashAmount);
+        // Apply slash to node's stake (no reporter reward for voluntary quit)
+        (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
+        _distributeSlashFunds(address(0), totalSlashed);
 
         // If slashing caused forced order exits, handle them
         if (forcedOrderExit) {
@@ -392,7 +406,9 @@ contract FileMarket {
     {
         require(_slashAmount > 0, "invalid slash amount");
 
-        bool forcedOrderExit = nodeStaking.slashNode(_node, _slashAmount);
+        // No reporter reward for authority slashes
+        (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, _slashAmount);
+        _distributeSlashFunds(address(0), totalSlashed);
 
         if (forcedOrderExit) {
             _handleForcedOrderExits(_node);
@@ -434,7 +450,10 @@ contract FileMarket {
         }
 
         // Update node's used capacity to match the data that remains
-        nodeStaking.forceReduceUsed(_node, newUsed);
+        // Skip if node was fully slashed (capacity already 0, used already set by slashNode)
+        if (newCapacity > 0 || nodeStaking.isValidNode(_node)) {
+            nodeStaking.forceReduceUsed(_node, newUsed);
+        }
 
         // Resize the exited orders array to actual count
         uint256[] memory actualExitedOrders = new uint256[](exitCount);
@@ -671,8 +690,9 @@ contract FileMarket {
         (,,, uint256 publicKeyX, uint256 publicKeyY) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKeyX != 0 && publicKeyY != 0, "node public key not set");
 
-        // Prepare public inputs for POI verifier: [randomness, rootHash, commitment, publicKeyX, publicKeyY]
-        uint256[5] memory publicInputs = [currentRandomness, fileRootHash, uint256(_commitment), publicKeyX, publicKeyY];
+        // Prepare public inputs for POI verifier matching gnark circuit field order:
+        // [commitment, randomness, publicKeyX, publicKeyY, rootHash]
+        uint256[5] memory publicInputs = [uint256(_commitment), currentRandomness, publicKeyX, publicKeyY, fileRootHash];
 
         // Verify proof using POI verifier - reverts on invalid proof
         poiVerifier.verifyProof(_proof, publicInputs);
@@ -705,7 +725,8 @@ contract FileMarket {
         require(nodeToProveOrderId[primaryProver] != 0, "primary not assigned to order");
         uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
 
-        bool forcedExit = nodeStaking.slashNode(primaryProver, severeSlashAmount);
+        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
+        _distributeSlashFunds(msg.sender, totalSlashed);
         if (forcedExit) {
             _handleForcedOrderExits(primaryProver);
         }
@@ -736,7 +757,8 @@ contract FileMarket {
                 // Normal slashing for secondary provers
                 uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
 
-                bool forcedExit = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
+                (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
+                _distributeSlashFunds(msg.sender, totalSlashed);
                 if (forcedExit) {
                     _handleForcedOrderExits(secondaryProver);
                 }
@@ -809,9 +831,8 @@ contract FileMarket {
             currentPrimaryProver = address(0);
 
             // Advance randomness even without a selection to keep the beacon moving
-            currentRandomness = uint256(
-                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
-            );
+            currentRandomness =
+                uint256(keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender)));
             lastChallengeStep = currentStep_;
             emit HeartbeatTriggered(currentRandomness, currentStep_);
             return;
@@ -891,13 +912,16 @@ contract FileMarket {
     function _cleanupExpiredOrders() internal {
         uint256 batchSize = 10; // Process up to 10 orders per heartbeat to avoid gas limits
         uint256 processed = 0;
+        uint256 i = 0;
 
-        for (uint256 i = 0; i < activeOrders.length && processed < batchSize; i++) {
+        while (i < activeOrders.length && processed < batchSize) {
             uint256 activeOrderId = activeOrders[i];
             if (isOrderExpired(activeOrderId)) {
                 _completeExpiredOrderInternal(activeOrderId);
                 processed++;
-                i--; // Adjust index since array was modified
+                // Don't increment i — array shifted left after removal
+            } else {
+                i++;
             }
         }
     }
@@ -998,6 +1022,77 @@ contract FileMarket {
     /// @notice Get node's earnings from a specific order
     function getNodeOrderEarnings(address _node, uint256 _orderId) external view returns (uint256) {
         return nodeOrderEarnings[_orderId][_node];
+    }
+
+    /// @notice Distribute slashed funds: reporter gets a percentage, rest is burned
+    /// @param reporter The address that reported the failure (address(0) for no reward)
+    /// @param totalSlashed The total slashed amount received from NodeStaking
+    function _distributeSlashFunds(address reporter, uint256 totalSlashed) internal {
+        if (totalSlashed == 0) return;
+
+        totalSlashedReceived += totalSlashed;
+
+        uint256 reporterReward = 0;
+        if (reporter != address(0)) {
+            reporterReward = totalSlashed * reporterRewardBps / 10000;
+            if (reporterReward > 0) {
+                reporterPendingRewards[reporter] += reporterReward;
+                reporterEarnings[reporter] += reporterReward;
+                totalReporterRewards += reporterReward;
+                emit ReporterRewardAccrued(reporter, reporterReward, totalSlashed);
+            }
+        }
+
+        uint256 burnAmount = totalSlashed - reporterReward;
+        totalBurnedFromSlash += burnAmount;
+        if (burnAmount > 0) {
+            payable(address(0)).transfer(burnAmount);
+        }
+    }
+
+    /// @notice Claim accumulated reporter rewards
+    function claimReporterRewards() external nonReentrant {
+        uint256 amount = reporterPendingRewards[msg.sender];
+        require(amount > 0, "no reporter rewards");
+
+        reporterPendingRewards[msg.sender] = 0;
+        reporterWithdrawn[msg.sender] += amount;
+
+        payable(msg.sender).transfer(amount);
+
+        emit ReporterRewardsClaimed(msg.sender, amount);
+    }
+
+    /// @notice Set the reporter reward percentage (in basis points)
+    /// @param _newBps New reward percentage in basis points (max 5000 = 50%)
+    function setReporterRewardBps(uint256 _newBps) external onlyOwner {
+        require(_newBps <= MAX_REPORTER_REWARD_BPS, "exceeds max bps");
+        uint256 oldBps = reporterRewardBps;
+        reporterRewardBps = _newBps;
+        emit ReporterRewardBpsUpdated(oldBps, _newBps);
+    }
+
+    /// @notice Get reporter earnings info
+    function getReporterEarningsInfo(address _reporter)
+        external
+        view
+        returns (uint256 earned, uint256 withdrawn, uint256 pending)
+    {
+        earned = reporterEarnings[_reporter];
+        withdrawn = reporterWithdrawn[_reporter];
+        pending = reporterPendingRewards[_reporter];
+    }
+
+    /// @notice Get slash redistribution statistics
+    function getSlashRedistributionStats()
+        external
+        view
+        returns (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards, uint256 currentBps)
+    {
+        totalReceived = totalSlashedReceived;
+        totalBurned = totalBurnedFromSlash;
+        totalRewards = totalReporterRewards;
+        currentBps = reporterRewardBps;
     }
 
     /// @notice Allow contract to receive ETH from slashed nodes
@@ -1157,40 +1252,43 @@ contract FileMarket {
         totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();
     }
 
-    /// @notice Get order details by ID for dashboard
+    /// @notice Get order core details by ID
     function getOrderDetails(uint256 _orderId)
         external
         view
         returns (
-            address,
-            string memory,
-            uint256,
-            uint64,
-            uint16,
-            uint8,
-            uint8,
-            uint256,
-            uint256,
-            uint64,
-            bool,
-            address[] memory
+            address owner_,
+            string memory uri_,
+            uint256 root_,
+            uint64 maxSize_,
+            uint16 periods_,
+            uint8 replicas_,
+            uint8 filled_
         )
     {
         require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
         FileOrder storage order = orders[_orderId];
-        return (
-            order.owner,
-            order.file.uri,
-            order.file.root,
-            order.maxSize,
-            order.periods,
-            order.replicas,
-            order.filled,
-            order.escrow,
-            orderEscrowWithdrawn[_orderId],
-            order.startPeriod,
-            isOrderExpired(_orderId),
-            orderToNodes[_orderId]
-        );
+        owner_ = order.owner;
+        uri_ = order.file.uri;
+        root_ = order.file.root;
+        maxSize_ = order.maxSize;
+        periods_ = order.periods;
+        replicas_ = order.replicas;
+        filled_ = order.filled;
+    }
+
+    /// @notice Get order financial and status details by ID
+    function getOrderFinancials(uint256 _orderId)
+        external
+        view
+        returns (uint256 escrow_, uint256 withdrawn_, uint64 startPeriod_, bool expired_, address[] memory nodes_)
+    {
+        require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
+        FileOrder storage order = orders[_orderId];
+        escrow_ = order.escrow;
+        withdrawn_ = orderEscrowWithdrawn[_orderId];
+        startPeriod_ = order.startPeriod;
+        expired_ = isOrderExpired(_orderId);
+        nodes_ = orderToNodes[_orderId];
     }
 }

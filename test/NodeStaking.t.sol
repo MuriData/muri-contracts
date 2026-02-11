@@ -297,6 +297,400 @@ contract NodeStakingTest is Test {
         }
     }
 
+    // ===== SLASH RETURN AND FUND DESTINATION TESTS =====
+
+    function test_SlashNode_ReturnsTotalSlashed() public {
+        uint64 capacity = 1000;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
+
+        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
+
+        assertFalse(forcedOrderExit);
+        assertEq(totalSlashed, slashAmount);
+    }
+
+    function test_SlashNode_ReturnsTotalSlashed_WithAdditionalPenalty() public {
+        uint64 capacity = 1000;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
+
+        // Use all capacity so any slash forces exit
+        nodeStaking.updateNodeUsed(node1, capacity);
+
+        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        uint256 expectedAdditional = slashAmount / 2; // 50% additional penalty
+        (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
+
+        assertTrue(forcedOrderExit);
+        assertEq(totalSlashed, slashAmount + expectedAdditional);
+    }
+
+    function test_SlashNode_SendsFundsToMarket() public {
+        uint64 capacity = 1000;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234, 0x5678);
+
+        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        uint256 marketBalanceBefore = address(this).balance;
+
+        nodeStaking.slashNode(node1, slashAmount);
+
+        uint256 marketBalanceAfter = address(this).balance;
+        assertEq(marketBalanceAfter - marketBalanceBefore, slashAmount, "slashed funds sent to market");
+    }
+
+    // ===== CONSTRUCTOR TESTS =====
+
+    function test_Constructor_RevertInvalidMarket() public {
+        vm.expectRevert("invalid market");
+        new NodeStaking(address(0));
+    }
+
+    // ===== PUBLIC KEY VALIDATION =====
+
+    function test_StakeNode_RevertInvalidPublicKeyX() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        vm.expectRevert("invalid public key");
+        nodeStaking.stakeNode{value: stake}(capacity, 0, 0x5678);
+    }
+
+    function test_StakeNode_RevertInvalidPublicKeyY() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        vm.expectRevert("invalid public key");
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0);
+    }
+
+    // ===== DECREASE CAPACITY EDGE CASES =====
+
+    function test_DecreaseCapacity_RevertNotANode() public {
+        vm.prank(node1);
+        vm.expectRevert("not a node");
+        nodeStaking.decreaseCapacity(100);
+    }
+
+    function test_DecreaseCapacity_RevertZeroReduce() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.prank(node1);
+        vm.expectRevert("cannot reduce below used");
+        nodeStaking.decreaseCapacity(0);
+    }
+
+    // ===== INCREASE CAPACITY EDGE CASES =====
+
+    function test_IncreaseCapacity_RevertIncorrectStakeAmount() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.prank(node1);
+        vm.expectRevert("incorrect stake amount");
+        nodeStaking.increaseCapacity{value: 1}(500);
+    }
+
+    // ===== SLASH NODE EDGE CASES =====
+
+    function test_SlashNode_RevertNotANode() public {
+        vm.expectRevert("not a node");
+        nodeStaking.slashNode(node1, 100);
+    }
+
+    function test_SlashNode_RevertZeroAmount() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.expectRevert("invalid slash amount");
+        nodeStaking.slashNode(node1, 0);
+    }
+
+    function test_SlashNode_RevertExceedsStake() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.expectRevert("slash exceeds stake");
+        nodeStaking.slashNode(node1, stake + 1);
+    }
+
+    function test_SlashNode_RevertNotMarket() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.prank(node2);
+        vm.expectRevert("not market");
+        nodeStaking.slashNode(node1, 100);
+    }
+
+    function test_SlashNode_ForcedExit_AdditionalSlashCapped() public {
+        // Node stakes small amount, uses all capacity
+        // Slash nearly all → additionalSlash (50%) > remaining → capped
+        uint64 capacity = 100;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, capacity);
+
+        // Slash 90% of stake → remaining = 10%, additional = 45% but capped to 10%
+        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
+
+        assertTrue(forcedExit);
+        // additionalSlash = slashAmount/2 = 45*SPB, but remaining = 10*SPB → capped to 10*SPB
+        // totalSlashed = 90 + 10 = 100*SPB = full stake
+        assertEq(totalSlashed, stake, "entire stake slashed when additional is capped");
+
+        (uint256 remainingStake,,,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(remainingStake, 0, "node fully drained");
+    }
+
+    function test_SlashNode_ExactStakeSlash_NoForcedExit() public {
+        // Slash exactly the amount that reduces capacity to used (no forced exit)
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, 500);
+
+        // Slash enough to bring capacity down to exactly 500 (used)
+        // new capacity = (stake - slashAmount) / SPB = 500 → slashAmount = 500 * SPB
+        uint256 slashAmount = 500 * STAKE_PER_BYTE;
+        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
+
+        assertFalse(forcedExit, "no forced exit when capacity == used");
+        assertEq(totalSlashed, slashAmount);
+
+        (, uint64 newCap, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(newCap, 500);
+        assertEq(used, 500);
+    }
+
+    // ===== FORCE REDUCE USED TESTS =====
+
+    function test_ForceReduceUsed_Success() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, 500);
+
+        nodeStaking.forceReduceUsed(node1, 200);
+        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(used, 200);
+    }
+
+    function test_ForceReduceUsed_RevertNotMarket() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.prank(node2);
+        vm.expectRevert("not market");
+        nodeStaking.forceReduceUsed(node1, 0);
+    }
+
+    function test_ForceReduceUsed_RevertNotANode() public {
+        vm.expectRevert("not a node");
+        nodeStaking.forceReduceUsed(node1, 0);
+    }
+
+    function test_ForceReduceUsed_RevertExceedsCapacity() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        vm.expectRevert("new used exceeds capacity");
+        nodeStaking.forceReduceUsed(node1, 1001);
+    }
+
+    // ===== GET MAX SLASHABLE TESTS =====
+
+    function test_GetMaxSlashable_NotANode() public view {
+        assertEq(nodeStaking.getMaxSlashable(node1), 0);
+    }
+
+    function test_GetMaxSlashable_StakeLessThanRequired() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, capacity); // fully used
+
+        assertEq(nodeStaking.getMaxSlashable(node1), 0, "cannot slash when fully used");
+    }
+
+    function test_GetMaxSlashable_Normal() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, 300);
+
+        uint256 expected = (1000 - 300) * STAKE_PER_BYTE;
+        assertEq(nodeStaking.getMaxSlashable(node1), expected);
+    }
+
+    // ===== SIMULATE SLASH TESTS =====
+
+    function test_SimulateSlash_NotANode() public view {
+        (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, 100);
+        assertEq(newCap, 0);
+        assertFalse(willForce);
+    }
+
+    function test_SimulateSlash_ExceedsStake() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, stake + 1);
+        assertEq(newCap, 0);
+        assertFalse(willForce);
+    }
+
+    function test_SimulateSlash_NoForcedExit() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        uint256 slashAmount = 200 * STAKE_PER_BYTE;
+        (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
+        assertEq(newCap, 800);
+        assertFalse(willForce);
+    }
+
+    function test_SimulateSlash_ForcedExit() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, 900);
+
+        uint256 slashAmount = 200 * STAKE_PER_BYTE;
+        // remaining = 800*SPB, cap = 800, used = 900 → forced exit
+        // additional = 100*SPB (50% of 200), remaining -= 100 → 700*SPB, cap = 700
+        (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
+        assertEq(newCap, 700);
+        assertTrue(willForce);
+    }
+
+    function test_SimulateSlash_ForcedExit_AdditionalCapped() public {
+        uint64 capacity = 100;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, capacity);
+
+        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        // remaining = 10*SPB, cap = 10, used = 100 → forced exit
+        // additional = 45*SPB (capped to 10*SPB), remaining = 0, cap = 0
+        (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
+        assertEq(newCap, 0);
+        assertTrue(willForce);
+    }
+
+    // ===== NETWORK STATS TESTS =====
+
+    function test_GetNetworkStats() public {
+        uint64 cap1 = 1000;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake1}(cap1, 0x1234, 0x5678);
+
+        uint64 cap2 = 2000;
+        uint256 stake2 = uint256(cap2) * STAKE_PER_BYTE;
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: stake2}(cap2, 0xaaaa, 0xbbbb);
+
+        nodeStaking.updateNodeUsed(node1, 300);
+        nodeStaking.updateNodeUsed(node2, 500);
+
+        (uint256 totalNodes, uint256 totalCapStaked, uint256 totalCapUsed) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 2);
+        assertEq(totalCapStaked, 3000);
+        assertEq(totalCapUsed, 800);
+    }
+
+    function test_GetNetworkStats_ExcludesUnstakedNode() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: stake}(cap, 0xaaaa, 0xbbbb);
+
+        // Unstake node2
+        vm.prank(node2);
+        nodeStaking.unstakeNode();
+
+        (uint256 totalNodes, uint256 totalCapStaked,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 1, "unstaked node excluded");
+        assertEq(totalCapStaked, 1000);
+    }
+
+    // ===== ONLY-MARKET ACCESS CONTROL =====
+
+    function test_UpdateNodeUsed_RevertNotMarket() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        vm.prank(node2);
+        vm.expectRevert("not market");
+        nodeStaking.updateNodeUsed(node1, 0);
+    }
+
+    function test_UpdateNodeUsed_RevertNotANode() public {
+        vm.expectRevert("not a node");
+        nodeStaking.updateNodeUsed(node1, 0);
+    }
+
+    // ===== IS VALID NODE =====
+
+    function test_IsValidNode_ReturnsFalse() public view {
+        assertFalse(nodeStaking.isValidNode(node1));
+    }
+
+    function test_IsValidNode_ReturnsFalseAfterUnstake() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+        assertTrue(nodeStaking.isValidNode(node1));
+
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
+        assertFalse(nodeStaking.isValidNode(node1));
+    }
+
+    // Allow test contract (acting as market) to receive ETH from slashNode
+    receive() external payable {}
+
     // ===== REENTRANCY TESTS =====
 
     function test_ReentrancyProtection() public {

@@ -177,11 +177,12 @@ contract NodeStaking {
     /// @param node The address of the node to slash
     /// @param slashAmount The amount of stake to slash (in wei)
     /// @return forcedOrderExit True if the capacity reduction forced order exits
+    /// @return totalSlashed The total amount slashed (including any additional penalty)
     function slashNode(address node, uint256 slashAmount)
         external
         onlyMarket
         nonReentrant
-        returns (bool forcedOrderExit)
+        returns (bool forcedOrderExit, uint256 totalSlashed)
     {
         NodeInfo storage info = nodes[node];
         require(info.capacity > 0, "not a node");
@@ -197,12 +198,15 @@ contract NodeStaking {
         // Check if capacity reduction forces order exits
         forcedOrderExit = newCapacity < info.used;
 
+        uint256 actualAdditionalSlash = 0;
+
         if (forcedOrderExit) {
             // Severe slashing: additional penalty for forced order exits
             uint256 additionalSlash = slashAmount / 2; // 50% additional penalty
             if (additionalSlash > info.stake) {
                 additionalSlash = info.stake;
             }
+            actualAdditionalSlash = additionalSlash;
 
             if (additionalSlash > 0) {
                 info.stake -= additionalSlash;
@@ -219,15 +223,13 @@ contract NodeStaking {
             info.capacity = newCapacity;
         }
 
-        // Send slashed amount to market contract (could be redistributed or burned)
-        uint256 totalSlashed = slashAmount + (forcedOrderExit ? (slashAmount <= info.stake ? slashAmount / 2 : 0) : 0);
+        // Send slashed funds to market contract (caller) for redistribution
+        totalSlashed = slashAmount + actualAdditionalSlash;
         if (totalSlashed > 0) {
-            BURN_ADDRESS.transfer(totalSlashed);
+            payable(msg.sender).transfer(totalSlashed);
         }
 
         emit NodeSlashed(node, slashAmount, newCapacity, forcedOrderExit);
-
-        return forcedOrderExit;
     }
 
     /// @notice Emergency function to force reduce a node's used capacity (called by market after forced order exits)
