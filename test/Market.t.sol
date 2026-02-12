@@ -335,6 +335,10 @@ contract MarketTest is Test {
         uint256 balanceAfter = user1.balance;
         uint256 penalty = totalCost / 10; // 10% penalty
         assertEq(balanceAfter - balanceBefore, totalCost - penalty);
+
+        // Penalty should be credited to the node that was serving
+        assertEq(market.nodePendingRewards(node1), penalty, "penalty distributed to node");
+        assertEq(market.totalCancellationPenalties(), penalty, "penalty tracked");
     }
 
     function test_RandomOrderSelection() public {
@@ -537,13 +541,15 @@ contract MarketTest is Test {
         vm.prank(user1);
         market.cancelOrder(orderId);
 
-        uint256 nodePending = market.nodePendingRewards(node1);
-        uint256 expectedReward = uint256(maxSize) * price;
-        assertEq(nodePending, expectedReward, "reward queued for node");
-
+        uint256 expectedReward = uint256(maxSize) * price; // 1 period of service
         uint256 expectedRemaining = totalCost - expectedReward;
         uint256 expectedPenalty = expectedRemaining / 10;
         uint256 expectedRefund = expectedRemaining - expectedPenalty;
+
+        // Node pending = settled reward + cancellation penalty
+        uint256 nodePending = market.nodePendingRewards(node1);
+        assertEq(nodePending, expectedReward + expectedPenalty, "reward + penalty queued for node");
+
         uint256 ownerBalanceAfter = user1.balance;
         assertEq(
             ownerBalanceAfter - ownerBalanceBefore, expectedRefund, "owner refund accounts for rewards and penalty"
@@ -553,8 +559,55 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.claimRewards();
         uint256 nodeBalanceAfter = node1.balance;
-        assertEq(nodeBalanceAfter - nodeBalanceBefore, expectedReward, "node reward paid after cancellation");
+        assertEq(
+            nodeBalanceAfter - nodeBalanceBefore, expectedReward + expectedPenalty, "node receives reward + penalty"
+        );
         assertEq(market.nodePendingRewards(node1), 0, "pending rewards cleared after claim");
+    }
+
+    function test_CancellationPenaltyDistributedToMultipleNodes() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+
+        uint64 maxSize = 512; // fits in both nodes
+        uint16 periods = 4;
+        uint8 replicas = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+        vm.prank(node2);
+        market.executeOrder(orderId);
+
+        // Cancel immediately — full escrow remaining, no rewards settled yet
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        uint256 penalty = totalCost / 10;
+        uint256 perNode = penalty / 2;
+        // Last node gets remainder to avoid rounding dust
+        uint256 lastNodeShare = penalty - perNode;
+
+        assertEq(market.nodePendingRewards(node1), perNode, "node1 penalty share");
+        assertEq(market.nodePendingRewards(node2), lastNodeShare, "node2 penalty share");
+        assertEq(market.totalCancellationPenalties(), penalty, "total penalties tracked");
+
+        // Both nodes can claim their shares
+        uint256 node1Before = node1.balance;
+        vm.prank(node1);
+        market.claimRewards();
+        assertEq(node1.balance - node1Before, perNode, "node1 claims penalty");
+
+        uint256 node2Before = node2.balance;
+        vm.prank(node2);
+        market.claimRewards();
+        assertEq(node2.balance - node2Before, lastNodeShare, "node2 claims penalty");
     }
 
     function test_RevertWhen_ExecuteOrderAfterExpiry() public {

@@ -133,6 +133,9 @@ contract FileMarket {
     bool public primaryFailureReported; // primary failure already reported for current step
     bool public secondarySlashProcessed; // secondary slashing already handled for current challenge
 
+    // Cancellation penalty tracking (placed after proof system to preserve storage layout)
+    uint256 public totalCancellationPenalties; // total early-cancellation penalties distributed to nodes
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -152,6 +155,7 @@ contract FileMarket {
     event ReporterRewardAccrued(address indexed reporter, uint256 rewardAmount, uint256 slashedAmount);
     event ReporterRewardsClaimed(address indexed reporter, uint256 amount);
     event ReporterRewardBpsUpdated(uint256 oldBps, uint256 newBps);
+    event CancellationPenaltyDistributed(uint256 indexed orderId, uint256 penaltyAmount, uint256 nodeCount);
 
     // Place a new file storage order
     function placeOrder(
@@ -340,15 +344,21 @@ contract FileMarket {
         require(order.owner == msg.sender, "not order owner");
         require(!isOrderExpired(_orderId), "order already expired");
 
+        // Snapshot assigned nodes before settlement empties the array
+        address[] memory assignedNodes = orderToNodes[_orderId];
+
         uint256 settlePeriod = currentPeriod();
-        (, uint256 assignmentCount) = _settleAndReleaseNodes(order, _orderId, settlePeriod);
+        _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Clean up order data
         uint256 remainingEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
         uint256 refundAmount = remainingEscrow;
-        if (assignmentCount > 0 && remainingEscrow > 0) {
+        if (assignedNodes.length > 0 && remainingEscrow > 0) {
             uint256 penalty = remainingEscrow / 10; // 10% penalty
             refundAmount -= penalty;
+
+            // Distribute penalty to nodes that were serving this order
+            _distributeCancellationPenalty(_orderId, penalty, assignedNodes);
         }
 
         _removeFromActiveOrders(_orderId);
@@ -1048,6 +1058,24 @@ contract FileMarket {
         if (burnAmount > 0) {
             payable(address(0)).transfer(burnAmount);
         }
+    }
+
+    /// @notice Distribute early-cancellation penalty to the nodes that were serving the order
+    function _distributeCancellationPenalty(uint256 _orderId, uint256 _penalty, address[] memory _nodes) internal {
+        uint256 count = _nodes.length;
+        uint256 perNode = _penalty / count;
+        uint256 distributed = 0;
+
+        for (uint256 i = 0; i < count; i++) {
+            // Last node receives the remainder to avoid rounding dust
+            uint256 share = (i == count - 1) ? _penalty - distributed : perNode;
+            nodePendingRewards[_nodes[i]] += share;
+            nodeEarnings[_nodes[i]] += share;
+            distributed += share;
+        }
+
+        totalCancellationPenalties += _penalty;
+        emit CancellationPenaltyDistributed(_orderId, _penalty, count);
     }
 
     /// @notice Claim accumulated reporter rewards
