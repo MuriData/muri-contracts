@@ -8,6 +8,8 @@ contract FileMarket {
     uint256 constant PERIOD = 7 days; // single billing unit
     uint256 constant EPOCH = 4 * PERIOD;
     uint256 constant STEP = 30 seconds; // proof submission period
+    uint256 constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
+    uint256 constant MAX_ORDERS_PER_NODE = 50; // cap orders per node to bound forced-exit iteration
     uint256 immutable GENESIS_TS; // contract deploy timestamp
     address public owner;
     mapping(address => bool) public slashAuthorities;
@@ -136,6 +138,9 @@ contract FileMarket {
     // Cancellation penalty tracking (placed after proof system to preserve storage layout)
     uint256 public totalCancellationPenalties; // total early-cancellation penalties distributed to nodes
 
+    // Pull-payment refunds (placed after totalCancellationPenalties to preserve storage layout)
+    mapping(address => uint256) public pendingRefunds;
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -156,6 +161,9 @@ contract FileMarket {
     event ReporterRewardsClaimed(address indexed reporter, uint256 amount);
     event ReporterRewardBpsUpdated(uint256 oldBps, uint256 newBps);
     event CancellationPenaltyDistributed(uint256 indexed orderId, uint256 penaltyAmount, uint256 nodeCount);
+    event RefundQueued(address indexed recipient, uint256 amount);
+    event RefundWithdrawn(address indexed recipient, uint256 amount);
+    event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
 
     // Place a new file storage order
     function placeOrder(
@@ -193,14 +201,16 @@ contract FileMarket {
 
         emit OrderPlaced(orderId, msg.sender, _maxSize, _periods, _replicas);
 
-        // Refund excess payment
+        // Queue excess payment as pull-refund
         if (msg.value > totalCost) {
-            payable(msg.sender).transfer(msg.value - totalCost);
+            uint256 excess = msg.value - totalCost;
+            pendingRefunds[msg.sender] += excess;
+            emit RefundQueued(msg.sender, excess);
         }
     }
 
     // Node executes an order (claims a replica slot)
-    function executeOrder(uint256 _orderId) external {
+    function executeOrder(uint256 _orderId) external nonReentrant {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
 
         FileOrder storage order = orders[_orderId];
@@ -214,6 +224,9 @@ contract FileMarket {
         for (uint256 i = 0; i < assignedNodes.length; i++) {
             require(assignedNodes[i] != msg.sender, "already assigned to this order");
         }
+
+        // Enforce per-node order cap to bound forced-exit iteration
+        require(nodeToOrders[msg.sender].length < MAX_ORDERS_PER_NODE, "max orders per node reached");
 
         // Assign node to order
         assignedNodes.push(msg.sender);
@@ -330,9 +343,10 @@ contract FileMarket {
         delete orders[_orderId];
         delete orderToNodes[_orderId];
 
-        // Refund any remaining escrow to order owner
+        // Queue remaining escrow as pull-refund
         if (refundAmount > 0) {
-            payable(orderOwner).transfer(refundAmount);
+            pendingRefunds[orderOwner] += refundAmount;
+            emit RefundQueued(orderOwner, refundAmount);
         }
 
         emit OrderCompleted(_orderId);
@@ -365,14 +379,17 @@ contract FileMarket {
         delete orders[_orderId];
         delete orderToNodes[_orderId];
 
-        // Refund to user
-        payable(msg.sender).transfer(refundAmount);
+        // Queue refund as pull-payment
+        if (refundAmount > 0) {
+            pendingRefunds[msg.sender] += refundAmount;
+            emit RefundQueued(msg.sender, refundAmount);
+        }
 
         emit OrderCancelled(_orderId, refundAmount);
     }
 
     // Node quits from an order with slashing
-    function quitOrder(uint256 _orderId) external {
+    function quitOrder(uint256 _orderId) external nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order already expired");
@@ -390,8 +407,10 @@ contract FileMarket {
         }
         require(found, "node not assigned to this order");
 
-        // Calculate slash amount (equivalent to 1 period of storage cost)
-        uint256 slashAmount = uint256(order.maxSize) * order.price;
+        // Calculate slash amount (up to QUIT_SLASH_PERIODS periods of storage cost, capped at remaining)
+        uint256 remainingPeriods = (order.startPeriod + order.periods) - currentPeriod();
+        uint256 slashPeriods = QUIT_SLASH_PERIODS < remainingPeriods ? QUIT_SLASH_PERIODS : remainingPeriods;
+        uint256 slashAmount = uint256(order.maxSize) * order.price * slashPeriods;
 
         // Apply slash to node's stake (no reporter reward for voluntary quit)
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
@@ -498,6 +517,10 @@ contract FileMarket {
                 assignedNodes.pop();
                 order.filled--;
 
+                if (order.filled < order.replicas) {
+                    emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
+                }
+
                 return order.maxSize;
             }
         }
@@ -523,6 +546,10 @@ contract FileMarket {
         }
         assignedNodes.pop();
         order.filled--;
+
+        if (order.filled < order.replicas) {
+            emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
+        }
 
         // Free up node capacity
         (,, uint64 used,,) = nodeStaking.getNodeInfo(_node);
@@ -594,7 +621,8 @@ contract FileMarket {
         nodeLastClaimPeriod[node] = currentPeriod();
         nodeWithdrawn[node] += totalClaimable;
 
-        payable(node).transfer(totalClaimable);
+        (bool success,) = node.call{value: totalClaimable}("");
+        require(success, "transfer failed");
 
         emit RewardsClaimed(node, totalClaimable);
     }
@@ -670,7 +698,7 @@ contract FileMarket {
     }
 
     /// @notice Submit proof for current challenge
-    function submitProof(uint256[8] calldata _proof, bytes32 _commitment) external {
+    function submitProof(uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
         require(currentStep() > lastChallengeStep, "no active challenge");
         require(currentStep() <= lastChallengeStep + 1, "challenge period expired");
 
@@ -869,6 +897,10 @@ contract FileMarket {
             if (orderNodes.length > 0) {
                 uint256 r = uint256(keccak256(abi.encodePacked(currentRandomness, orderId, i)));
                 address secondaryNode = orderNodes[r % orderNodes.length];
+                // Skip if this node is already the primary prover
+                if (secondaryNode == primary) {
+                    continue;
+                }
                 currentSecondaryProvers.push(secondaryNode);
                 nodeToProveOrderId[secondaryNode] = orderId;
                 secondaryCount++;
@@ -966,7 +998,8 @@ contract FileMarket {
         delete orderToNodes[_orderId];
 
         if (refundAmount > 0) {
-            payable(orderOwner).transfer(refundAmount);
+            pendingRefunds[orderOwner] += refundAmount;
+            emit RefundQueued(orderOwner, refundAmount);
         }
 
         emit OrderCompleted(_orderId);
@@ -1086,7 +1119,8 @@ contract FileMarket {
         reporterPendingRewards[msg.sender] = 0;
         reporterWithdrawn[msg.sender] += amount;
 
-        payable(msg.sender).transfer(amount);
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "transfer failed");
 
         emit ReporterRewardsClaimed(msg.sender, amount);
     }
@@ -1121,6 +1155,16 @@ contract FileMarket {
         totalBurned = totalBurnedFromSlash;
         totalRewards = totalReporterRewards;
         currentBps = reporterRewardBps;
+    }
+
+    /// @notice Withdraw accumulated pull-payment refunds
+    function withdrawRefund() external nonReentrant {
+        uint256 amount = pendingRefunds[msg.sender];
+        require(amount > 0, "no refund");
+        pendingRefunds[msg.sender] = 0;
+        (bool success,) = msg.sender.call{value: amount}("");
+        require(success, "transfer failed");
+        emit RefundWithdrawn(msg.sender, amount);
     }
 
     /// @notice Allow contract to receive ETH from slashed nodes
