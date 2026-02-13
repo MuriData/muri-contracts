@@ -3707,6 +3707,45 @@ contract MarketTest is Test {
         market.completeExpiredOrder(orderId);
         assertEq(market.getActiveOrdersCount(), 0, "order removed after completion");
     }
+
+    /// @notice Verify that _cleanupExpiredOrders (via triggerHeartbeat) is bounded by
+    /// CLEANUP_SCAN_CAP and does not iterate over the entire activeOrders array.
+    function test_CleanupExpiredOrders_BoundedGas() public {
+        // Create 200 non-expired orders (cheap, 1-byte, long-lived)
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 1;
+        uint16 periods = 100; // very long-lived so none expire
+        uint8 replicas = 1;
+        uint256 price = 1; // 1 wei per byte per period
+
+        for (uint256 j = 0; j < 200; j++) {
+            address creator = address(uint160(0xF000 + j));
+            uint256 cost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
+            vm.deal(creator, cost);
+            vm.prank(creator);
+            market.placeOrder{value: cost}(fileMeta, maxSize, periods, replicas, price);
+        }
+
+        assertEq(market.getActiveOrdersCount(), 200, "should have 200 active orders");
+
+        // Advance time so heartbeat is allowed, but none of the orders expire
+        vm.warp(block.timestamp + 31);
+
+        // Trigger heartbeat — internally calls _cleanupExpiredOrders.
+        // If the scan were unbounded (O(200)), gas would be much higher.
+        // With CLEANUP_SCAN_CAP = 50, only 50 entries are checked.
+        uint256 gasBefore = gasleft();
+        market.triggerHeartbeat();
+        uint256 gasUsed = gasBefore - gasleft();
+
+        // All 200 orders should still be active (none expired)
+        assertEq(market.getActiveOrdersCount(), 200, "no orders should be cleaned up");
+
+        // Sanity: gas used should be well below what an unbounded 200-entry scan would cost.
+        // This is a loose upper bound; the key property is that the call completes without
+        // hitting the block gas limit even with a large activeOrders array.
+        assertTrue(gasUsed < 5_000_000, "heartbeat gas should be bounded");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

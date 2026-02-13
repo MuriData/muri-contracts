@@ -10,6 +10,7 @@ contract FileMarket {
     uint256 constant STEP = 30 seconds; // proof submission period
     uint256 constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
     uint256 constant MAX_ORDERS_PER_NODE = 50; // cap orders per node to bound forced-exit iteration
+    uint256 constant CLEANUP_SCAN_CAP = 50; // max entries scanned per _cleanupExpiredOrders call
     uint256 immutable GENESIS_TS; // contract deploy timestamp
     address public owner;
     mapping(address => bool) public slashAuthorities;
@@ -1151,8 +1152,9 @@ contract FileMarket {
     }
 
     /// @notice Cleanup expired orders automatically using a persistent cursor.
-    /// Scans at most one full cycle (original length) per call, processing up to batchSize.
-    /// The cursor persists across heartbeats so each call resumes where the last left off.
+    /// Scans at most CLEANUP_SCAN_CAP entries per call, processing up to batchSize expired orders.
+    /// The cursor persists across heartbeats so each call resumes where the last left off,
+    /// amortising full-array scans across multiple heartbeats.
     function _cleanupExpiredOrders() internal {
         uint256 len = activeOrders.length;
         if (len == 0) {
@@ -1163,12 +1165,12 @@ contract FileMarket {
         uint256 batchSize = 10;
         uint256 processed = 0;
         uint256 checked = 0;
-        uint256 startLen = len; // cap checks at original length to prevent infinite loops
+        uint256 maxChecks = len < CLEANUP_SCAN_CAP ? len : CLEANUP_SCAN_CAP;
 
         if (cleanupCursor >= len) cleanupCursor = 0;
         uint256 i = cleanupCursor;
 
-        while (checked < startLen && processed < batchSize) {
+        while (checked < maxChecks && processed < batchSize) {
             if (len == 0) break;
 
             uint256 activeOrderId = activeOrders[i];
