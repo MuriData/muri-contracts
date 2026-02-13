@@ -864,6 +864,89 @@ contract NodeStakingTest is Test {
         // Verify the malicious contract was able to detect reentrancy attempt
         assertTrue(malicious.reentrancyDetected());
     }
+
+    // ===== SLASH TO ZERO CAPACITY — RESIDUAL STAKE CLEANUP =====
+
+    /// @notice When slashing leaves capacity == 0 but residual stake > 0 (due to
+    /// rounding in stake / STAKE_PER_BYTE), the residual must be burned and the
+    /// node cleaned up. Otherwise the node becomes invalid yet cannot unstake,
+    /// permanently locking the residual funds.
+    function test_SlashNode_ZeroCapacity_BurnsResidualAndCleansUp() public {
+        // Stake 2 bytes → stake = 2 * STAKE_PER_BYTE
+        uint64 capacity = 2;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        assertTrue(nodeStaking.isValidNode(node1), "node should be valid");
+
+        // Slash just over 1 byte's worth so remaining < STAKE_PER_BYTE → capacity = 0, residual > 0
+        uint256 slashAmount = STAKE_PER_BYTE + 1;
+        uint256 residual = stake - slashAmount; // STAKE_PER_BYTE - 1
+        assertTrue(residual > 0, "should have residual");
+        assertTrue(residual < STAKE_PER_BYTE, "residual should not cover 1 byte");
+
+        uint256 burnBalanceBefore = address(0).balance;
+        nodeStaking.slashNode(node1, slashAmount);
+        uint256 burnBalanceAfter = address(0).balance;
+
+        // Node should be fully cleaned up
+        assertFalse(nodeStaking.isValidNode(node1), "node should be invalid");
+        (uint256 remainingStake, uint64 cap,,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(remainingStake, 0, "stake should be zero after cleanup");
+        assertEq(cap, 0, "capacity should be zero");
+
+        // Residual should have been burned
+        assertEq(burnBalanceAfter - burnBalanceBefore, residual, "residual burned to address(0)");
+
+        // Node should be removed from nodeList
+        (uint256 totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 0, "node should be removed from nodeList");
+    }
+
+    /// @notice When slashing takes the full stake (no residual), the node is
+    /// still cleaned up and removed from nodeList.
+    function test_SlashNode_ZeroCapacity_NoResidual_CleansUp() public {
+        uint64 capacity = 100;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.updateNodeUsed(node1, capacity);
+
+        // Slash 90% → forced exit → additional 50% capped to remaining → full drain
+        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        nodeStaking.slashNode(node1, slashAmount);
+
+        // Node should be fully cleaned up
+        assertFalse(nodeStaking.isValidNode(node1), "node should be invalid");
+        (uint256 totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 0, "node removed from nodeList");
+
+        // Node can re-stake without duplicate nodeList entry
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        assertTrue(nodeStaking.isValidNode(node1), "node can re-stake");
+        (totalNodes,,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 1, "exactly one entry in nodeList");
+    }
+
+    /// @notice After slash to zero, the node can re-stake without being blocked
+    /// by "already staked" since the node entry was deleted.
+    function test_SlashNode_ZeroCapacity_CanRestake() public {
+        uint64 capacity = 2;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        // Slash to zero capacity with residual
+        uint256 slashAmount = STAKE_PER_BYTE + 1;
+        nodeStaking.slashNode(node1, slashAmount);
+
+        // Re-stake should succeed (not blocked by "already staked")
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA, 0xBBBB);
+        assertTrue(nodeStaking.isValidNode(node1), "node should be valid after re-stake");
+    }
 }
 
 // Malicious contract for testing reentrancy protection

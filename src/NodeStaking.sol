@@ -263,6 +263,26 @@ contract NodeStaking {
         }
 
         emit NodeSlashed(node, slashAmount, newCapacity, forcedOrderExit);
+
+        // If capacity dropped to zero, burn any residual stake dust and remove node
+        if (info.capacity == 0) {
+            uint256 residual = info.stake;
+            if (residual > 0) {
+                info.stake = 0;
+                BURN_ADDRESS.transfer(residual);
+            }
+            // Remove from nodeList (swap-and-pop)
+            uint256 idx = nodeIndexInList[node];
+            uint256 lastIdx = nodeList.length - 1;
+            if (idx != lastIdx) {
+                address lastNode = nodeList[lastIdx];
+                nodeList[idx] = lastNode;
+                nodeIndexInList[lastNode] = idx;
+            }
+            nodeList.pop();
+            delete nodeIndexInList[node];
+            delete nodes[node];
+        }
     }
 
     /// @notice Emergency function to force reduce a node's used capacity (called by market after forced order exits)
