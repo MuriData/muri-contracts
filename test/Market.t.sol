@@ -3292,6 +3292,123 @@ contract MarketTest is Test {
             assertTrue(challengedOrders[i] != expiredOrderId, "expired order must not appear in challenge set");
         }
     }
+
+    // =========================================================================
+    // Regression: low-stake provers must be slashed (not revert)
+    // =========================================================================
+
+    /// @dev Primary prover with stake < 1000*STAKE_PER_BYTE should be slashed
+    ///      for their full stake instead of reverting.
+    function test_ReportPrimaryFailure_LowStakeProver() public {
+        // Stake node1 with minimal stake (well below 1000*STAKE_PER_BYTE severe slash)
+        uint64 tinyCapacity = 1; // 1 byte → stake = 1 * STAKE_PER_BYTE
+        uint256 tinyStake = uint256(tinyCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, tinyStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: tinyStake}(tinyCapacity, 0x1234, 0x5678);
+
+        // Need a second node for heartbeat selection
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        // Place order small enough for node1's capacity
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint256 totalCost = uint256(tinyCapacity) * 2 * 1e12;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, tinyCapacity, 2, 1, 1e12);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Also let node2 take an order so heartbeat has options
+        vm.prank(user1);
+        uint256 orderId2 = market.placeOrder{value: uint256(256) * 2 * 1e12}(fileMeta, 256, 2, 1, 1e12);
+        vm.prank(node2);
+        market.executeOrder(orderId2);
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        // Force node1 as primary prover via storage
+        vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(node1))));
+        bytes32 mapSlot = keccak256(abi.encode(node1, SLOT_NODE_TO_PROVE_ORDER_ID));
+        vm.store(address(market), mapSlot, bytes32(orderId));
+
+        // Advance past challenge window
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        assertTrue(stakeBefore < 1000 * STAKE_PER_BYTE, "precondition: stake below severe slash");
+
+        // Reporter must be a valid node
+        _stakeTestNode(node3, 0x9999, 0x8888);
+
+        // Should NOT revert — slash is capped to node's stake
+        vm.prank(node3);
+        market.reportPrimaryFailure();
+
+        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        assertTrue(stakeAfter < stakeBefore, "low-stake primary was slashed");
+    }
+
+    /// @dev Secondary prover with stake < 100*STAKE_PER_BYTE should be slashed
+    ///      for their full stake instead of reverting.
+    function test_SlashSecondaryFailures_LowStakeProver() public {
+        // node1 is primary with normal stake
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // node2 is secondary with minimal stake
+        uint64 tinyCapacity = 1;
+        uint256 tinyStake = uint256(tinyCapacity) * STAKE_PER_BYTE;
+        vm.deal(node2, tinyStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: tinyStake}(tinyCapacity, 0xabcd, 0xef01);
+
+        // Place orders
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+
+        vm.prank(user1);
+        uint256 orderId1 = market.placeOrder{value: uint256(256) * 2 * 1e12}(fileMeta, 256, 2, 1, 1e12);
+        vm.prank(node1);
+        market.executeOrder(orderId1);
+
+        uint256 totalCost2 = uint256(tinyCapacity) * 2 * 1e12;
+        vm.prank(user1);
+        uint256 orderId2 = market.placeOrder{value: totalCost2}(fileMeta, tinyCapacity, 2, 1, 1e12);
+        vm.prank(node2);
+        market.executeOrder(orderId2);
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        // Force node1 as primary, node2 as secondary via storage
+        vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(node1))));
+        bytes32 mapSlot1 = keccak256(abi.encode(node1, SLOT_NODE_TO_PROVE_ORDER_ID));
+        vm.store(address(market), mapSlot1, bytes32(orderId1));
+
+        // Set currentSecondaryProvers = [node2]
+        vm.store(address(market), bytes32(uint256(26)), bytes32(uint256(1)));
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(26)));
+        vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
+
+        // Set nodeToProveOrderId[node2] = orderId2
+        bytes32 mapSlot2 = keccak256(abi.encode(node2, SLOT_NODE_TO_PROVE_ORDER_ID));
+        vm.store(address(market), mapSlot2, bytes32(orderId2));
+
+        // Advance past challenge window
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node2);
+        assertTrue(stakeBefore < 100 * STAKE_PER_BYTE, "precondition: stake below normal slash");
+
+        // Should NOT revert — slash is capped to node's stake
+        vm.prank(user2);
+        market.slashSecondaryFailures();
+
+        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node2);
+        assertTrue(stakeAfter < stakeBefore, "low-stake secondary was slashed");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

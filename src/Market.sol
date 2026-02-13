@@ -764,6 +764,12 @@ contract FileMarket {
         require(nodeToProveOrderId[primaryProver] != 0, "primary not assigned to order");
         uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
 
+        // Cap to available stake to prevent revert
+        (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
+        if (severeSlashAmount > nodeStake) {
+            severeSlashAmount = nodeStake;
+        }
+
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
         _distributeSlashFunds(msg.sender, totalSlashed);
         if (forcedExit) {
@@ -797,16 +803,26 @@ contract FileMarket {
                 if (nodeToProveOrderId[secondaryProver] == 0) {
                     continue;
                 }
+                if (!nodeStaking.isValidNode(secondaryProver)) {
+                    continue;
+                }
                 // Normal slashing for secondary provers
                 uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
 
-                (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
-                _distributeSlashFunds(msg.sender, totalSlashed);
-                if (forcedExit) {
-                    _handleForcedOrderExits(secondaryProver);
+                // Cap to available stake to prevent revert
+                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(secondaryProver);
+                if (normalSlashAmount > nodeStake) {
+                    normalSlashAmount = nodeStake;
                 }
 
-                emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
+                if (normalSlashAmount > 0) {
+                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
+                    _distributeSlashFunds(msg.sender, totalSlashed);
+                    if (forcedExit) {
+                        _handleForcedOrderExits(secondaryProver);
+                    }
+                    emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
+                }
                 proofSubmitted[secondaryProver] = true;
             }
         }
