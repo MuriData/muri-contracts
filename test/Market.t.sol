@@ -2385,6 +2385,189 @@ contract MarketTest is Test {
         assertEq(market.getActiveOrdersCount(), 1, "marketplace still functional");
     }
 
+    // -------------------------------------------------------------------------
+    // Fix: Overpayment double-counting regression tests
+    // -------------------------------------------------------------------------
+
+    function test_OverpaymentNotDoubleCountedOnCancel_NoNodes() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 1024;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        uint256 excess = 2 ether;
+        uint256 sent = totalCost + excess;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: sent}(fileMeta, maxSize, periods, 1, price);
+
+        // Escrow should store only totalCost, not msg.value
+        (uint256 storedEscrow,,) = market.getOrderEscrowInfo(orderId);
+        assertEq(storedEscrow, totalCost, "escrow stores totalCost not msg.value");
+
+        // Excess already queued
+        assertEq(market.pendingRefunds(user1), excess, "excess queued immediately");
+
+        // Cancel order (no nodes → full escrow refund, no penalty)
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // Total pending = excess + full escrow refund = excess + totalCost = sent
+        assertEq(market.pendingRefunds(user1), sent, "total refund equals original payment");
+
+        // Withdraw and verify exact amount
+        uint256 balBefore = user1.balance;
+        vm.prank(user1);
+        market.withdrawRefund();
+        assertEq(user1.balance - balBefore, sent, "user recovers exactly what was sent");
+
+        // Contract should have no leftover for this user
+        assertEq(market.pendingRefunds(user1), 0, "no pending after withdraw");
+    }
+
+    function test_OverpaymentNotDoubleCountedOnCancel_WithNodes() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        uint256 excess = 1 ether;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, maxSize, periods, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Cancel immediately — no periods elapsed, so no node rewards settled
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // remainingEscrow = totalCost - 0 = totalCost (no rewards paid yet)
+        // penalty = totalCost / 10
+        // refund from cancel = totalCost - penalty
+        uint256 penalty = totalCost / 10;
+        uint256 cancelRefund = totalCost - penalty;
+        uint256 totalPending = excess + cancelRefund;
+
+        assertEq(market.pendingRefunds(user1), totalPending, "exact refund: excess + cancel refund");
+
+        // Verify contract solvency: balance >= all pending claims
+        uint256 nodePending = market.nodePendingRewards(node1);
+        assertGe(address(market).balance, totalPending + nodePending, "contract solvent after overpay + cancel");
+    }
+
+    function test_OverpaymentNotDoubleCountedOnComplete() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        uint256 excess = 3 ether;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, maxSize, periods, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Warp past expiry
+        vm.warp(block.timestamp + PERIOD + 1);
+        market.completeExpiredOrder(orderId);
+
+        // Node earns maxSize * price * 1 period
+        uint256 nodeEarned = uint256(maxSize) * price;
+        uint256 escrowRefund = totalCost - nodeEarned;
+        uint256 totalPending = excess + escrowRefund;
+
+        assertEq(market.pendingRefunds(user1), totalPending, "exact refund: excess + remaining escrow");
+
+        // Withdraw and verify
+        uint256 balBefore = user1.balance;
+        vm.prank(user1);
+        market.withdrawRefund();
+        assertEq(user1.balance - balBefore, totalPending, "user gets exactly excess + unspent escrow");
+
+        // Verify contract solvency
+        uint256 nodePending = market.nodePendingRewards(node1);
+        assertGe(address(market).balance, nodePending, "contract solvent: can pay node rewards");
+    }
+
+    function test_OverpaymentSolvency_MultipleOrders() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint256 price = 1e12;
+
+        // Order 1: user1 overpays, 1 replica filled by node1
+        uint64 maxSize1 = 256;
+        uint256 totalCost1 = uint256(maxSize1) * 2 * price;
+        uint256 excess1 = 0.5 ether;
+        vm.prank(user1);
+        uint256 order1 = market.placeOrder{value: totalCost1 + excess1}(fileMeta, maxSize1, 2, 1, price);
+        vm.prank(node1);
+        market.executeOrder(order1);
+
+        // Order 2: user2 overpays, 1 replica filled by node2
+        uint64 maxSize2 = 128;
+        uint256 totalCost2 = uint256(maxSize2) * 3 * price;
+        uint256 excess2 = 1 ether;
+        vm.prank(user2);
+        uint256 order2 = market.placeOrder{value: totalCost2 + excess2}(fileMeta, maxSize2, 3, 1, price);
+        vm.prank(node2);
+        market.executeOrder(order2);
+
+        // user1 withdraws excess immediately
+        uint256 u1BalBefore = user1.balance;
+        vm.prank(user1);
+        market.withdrawRefund();
+        assertEq(user1.balance - u1BalBefore, excess1, "user1 excess withdrawn");
+
+        // user2 withdraws excess immediately
+        uint256 u2BalBefore = user2.balance;
+        vm.prank(user2);
+        market.withdrawRefund();
+        assertEq(user2.balance - u2BalBefore, excess2, "user2 excess withdrawn");
+
+        // Contract balance should still cover all escrows
+        assertGe(address(market).balance, totalCost1 + totalCost2, "contract holds enough for all active escrows");
+
+        // Complete order 1
+        vm.warp(block.timestamp + PERIOD * 2 + 1);
+        market.completeExpiredOrder(order1);
+
+        // Verify all pending claims are backed
+        uint256 allPending = market.pendingRefunds(user1) + market.pendingRefunds(user2)
+            + market.nodePendingRewards(node1) + market.nodePendingRewards(node2);
+        assertGe(address(market).balance, allPending, "contract solvent after partial completion");
+    }
+
+    function test_OverpaymentEscrowField_StoresTotalCost() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 1024;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        uint256 excess = 5 ether;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, maxSize, periods, 1, price);
+
+        // Verify escrow stores totalCost, not msg.value
+        (uint256 storedEscrow, uint256 paidToNodes, uint256 remaining) = market.getOrderEscrowInfo(orderId);
+        assertEq(storedEscrow, totalCost, "escrow == totalCost");
+        assertEq(paidToNodes, 0, "no payments yet");
+        assertEq(remaining, totalCost, "remaining == totalCost");
+
+        // Verify excess is separately tracked in pendingRefunds
+        assertEq(market.pendingRefunds(user1), excess, "excess in pendingRefunds");
+    }
+
     function test_PullPayment_HeartbeatNotBlocked() public {
         // Deploy a reverting contract as order owner
         RevertingReceiver revertingOwner = new RevertingReceiver(market);

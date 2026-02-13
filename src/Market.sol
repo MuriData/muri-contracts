@@ -192,7 +192,7 @@ contract FileMarket {
             price: _pricePerBytePerPeriod,
             filled: 0,
             startPeriod: uint64(currentPeriod()),
-            escrow: msg.value
+            escrow: totalCost
         });
 
         // Add to active orders for random selection
