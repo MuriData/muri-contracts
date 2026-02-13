@@ -3626,6 +3626,87 @@ contract MarketTest is Test {
         assertTrue(market.isChallengeable(orderIds[0]), "first order still challengeable");
         assertTrue(market.isChallengeable(orderIds[2]), "third order still challengeable");
     }
+
+    // -------------------------------------------------------------------------
+    // Block order deletion during active challenge window
+    // -------------------------------------------------------------------------
+
+    function test_CancelOrder_RevertDuringActiveChallenge() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance past genesis step and trigger heartbeat to start a challenge
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        // Verify challenge is active and our order is challenged
+        uint256[] memory challenged = market.getChallengeableOrders();
+        assertTrue(challenged.length > 0, "should have challengeable orders");
+
+        // Attempt to cancel the order during active challenge window — should revert
+        vm.prank(user1);
+        vm.expectRevert("order under active challenge");
+        market.cancelOrder(orderId);
+
+        // Warp past the challenge window (2 STEPs to be safe)
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Now cancellation should succeed
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // Verify order was cleaned up
+        assertEq(market.getActiveOrdersCount(), 0, "order removed after cancel");
+    }
+
+    function test_CompleteExpiredOrder_RevertDuringActiveChallenge() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Warp past order expiry
+        vm.warp(block.timestamp + PERIOD + STEP + 1);
+        assertTrue(market.isOrderExpired(orderId), "order should be expired");
+
+        // Directly set up an active challenge that includes this expired order via vm.store.
+        // This simulates the scenario where an expired order wasn't cleaned up yet and got challenged.
+        uint256 cs = market.currentStep();
+        // lastChallengeStep = currentStep - 1 (challenge window is open)
+        vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 1));
+        // currentChallengedOrders (slot 30): set length to 1, element[0] = orderId
+        vm.store(address(market), bytes32(uint256(30)), bytes32(uint256(1)));
+        vm.store(address(market), keccak256(abi.encode(uint256(30))), bytes32(orderId));
+
+        // Should revert during active challenge
+        vm.expectRevert("order under active challenge");
+        market.completeExpiredOrder(orderId);
+
+        // Warp past challenge window
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Now completion should succeed
+        market.completeExpiredOrder(orderId);
+        assertEq(market.getActiveOrdersCount(), 0, "order removed after completion");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

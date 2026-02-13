@@ -300,6 +300,19 @@ contract FileMarket {
         isChallengeable[_orderId] = false;
     }
 
+    /// @notice Check if an order is currently under active challenge
+    function _isOrderUnderActiveChallenge(uint256 _orderId) internal view returns (bool) {
+        if (lastChallengeStep == 0 || currentStep() > lastChallengeStep + 1) {
+            return false;
+        }
+        for (uint256 i = 0; i < currentChallengedOrders.length; i++) {
+            if (currentChallengedOrders[i] == _orderId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Internal random selection from a given array (shared logic for active and challengeable orders)
     // Uses virtual Fisher-Yates: O(K) storage reads and O(K^2) memory ops instead of O(N).
     function _selectFromArray(uint256[] storage arr, uint256 _randomSeed, uint256 _count)
@@ -334,13 +347,19 @@ contract FileMarket {
                 // Lookup mapped value for j (unmapped positions map to themselves)
                 uint256 valJ = j;
                 for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == j) { valJ = mapVals[k]; break; }
+                    if (mapKeys[k] == j) {
+                        valJ = mapVals[k];
+                        break;
+                    }
                 }
 
                 // Lookup mapped value for i
                 uint256 valI = i;
                 for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == i) { valI = mapVals[k]; break; }
+                    if (mapKeys[k] == i) {
+                        valI = mapVals[k];
+                        break;
+                    }
                 }
 
                 selectedOrders[i] = arr[valJ];
@@ -348,7 +367,11 @@ contract FileMarket {
                 // Record swap: map[j] = valI
                 bool found = false;
                 for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == j) { mapVals[k] = valI; found = true; break; }
+                    if (mapKeys[k] == j) {
+                        mapVals[k] = valI;
+                        found = true;
+                        break;
+                    }
                 }
                 if (!found) {
                     mapKeys[mapLen] = j;
@@ -411,6 +434,7 @@ contract FileMarket {
         require(isOrderExpired(_orderId), "order not expired");
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
+        require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
         uint256 settlePeriod = order.startPeriod + order.periods;
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
@@ -437,6 +461,7 @@ contract FileMarket {
         FileOrder storage order = orders[_orderId];
         require(order.owner == msg.sender, "not order owner");
         require(!isOrderExpired(_orderId), "order already expired");
+        require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
         // Snapshot assigned nodes before settlement empties the array
         address[] memory assignedNodes = orderToNodes[_orderId];
