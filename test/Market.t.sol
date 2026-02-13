@@ -1817,7 +1817,7 @@ contract MarketTest is Test {
             ,
             ,
             uint256 currentPeriod_,
-            uint256 currentStep_
+            uint256 currentStep_,
         ) = market.getGlobalStats();
 
         assertEq(totalOrders, 1);
@@ -2076,10 +2076,10 @@ contract MarketTest is Test {
     uint256 constant ZK_PROOF_7 = 0x0fe5d81f24ed2201bd04d3bc6ead94ab1ed37d23e7b7b7044c3b8637bc28178d;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
-    uint256 constant SLOT_CURRENT_RANDOMNESS = 23;
-    uint256 constant SLOT_LAST_CHALLENGE_STEP = 24;
-    uint256 constant SLOT_CURRENT_PRIMARY_PROVER = 25;
-    uint256 constant SLOT_NODE_TO_PROVE_ORDER_ID = 29;
+    uint256 constant SLOT_CURRENT_RANDOMNESS = 26;
+    uint256 constant SLOT_LAST_CHALLENGE_STEP = 27;
+    uint256 constant SLOT_CURRENT_PRIMARY_PROVER = 28;
+    uint256 constant SLOT_NODE_TO_PROVE_ORDER_ID = 32;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;
@@ -2196,7 +2196,7 @@ contract MarketTest is Test {
         _setupZKChallenge(node1, orderId);
 
         // Pre-set proofSubmitted[node1] = true via storage
-        bytes32 submittedSlot = keccak256(abi.encode(node1, uint256(28))); // slot 28 = proofSubmitted mapping
+        bytes32 submittedSlot = keccak256(abi.encode(node1, uint256(31))); // slot 31 = proofSubmitted mapping
         vm.store(address(market), submittedSlot, bytes32(uint256(1)));
 
         vm.prank(node1);
@@ -2343,10 +2343,10 @@ contract MarketTest is Test {
         vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(node1))));
 
         // Set currentSecondaryProvers array: length = 1, element[0] = node2
-        // Slot 26 holds the length of currentSecondaryProvers
-        vm.store(address(market), bytes32(uint256(26)), bytes32(uint256(1)));
-        // Array data starts at keccak256(26)
-        bytes32 secArrayStart = keccak256(abi.encode(uint256(26)));
+        // Slot 29 holds the length of currentSecondaryProvers
+        vm.store(address(market), bytes32(uint256(29)), bytes32(uint256(1)));
+        // Array data starts at keccak256(29)
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(29)));
         vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
 
         // Set nodeToProveOrderId[node2] = orderId
@@ -2408,8 +2408,8 @@ contract MarketTest is Test {
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(uint256(42)));
 
         // Set secondaryProvers = [node2]
-        vm.store(address(market), bytes32(uint256(26)), bytes32(uint256(1)));
-        bytes32 secArrayStart = keccak256(abi.encode(uint256(26)));
+        vm.store(address(market), bytes32(uint256(29)), bytes32(uint256(1)));
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(29)));
         vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
 
         // Do NOT set nodeToProveOrderId[node2] — leave at 0
@@ -2455,8 +2455,8 @@ contract MarketTest is Test {
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(uint256(42)));
 
         // Set secondaryProvers = [node2]
-        vm.store(address(market), bytes32(uint256(26)), bytes32(uint256(1)));
-        bytes32 secArrayStart = keccak256(abi.encode(uint256(26)));
+        vm.store(address(market), bytes32(uint256(29)), bytes32(uint256(1)));
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(29)));
         vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
 
         // Set nodeToProveOrderId[node2] = orderId
@@ -3388,8 +3388,8 @@ contract MarketTest is Test {
         vm.store(address(market), mapSlot1, bytes32(orderId1));
 
         // Set currentSecondaryProvers = [node2]
-        vm.store(address(market), bytes32(uint256(26)), bytes32(uint256(1)));
-        bytes32 secArrayStart = keccak256(abi.encode(uint256(26)));
+        vm.store(address(market), bytes32(uint256(29)), bytes32(uint256(1)));
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(29)));
         vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
 
         // Set nodeToProveOrderId[node2] = orderId2
@@ -3408,6 +3408,223 @@ contract MarketTest is Test {
 
         (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node2);
         assertTrue(stakeAfter < stakeBefore, "low-stake secondary was slashed");
+    }
+
+    // =========================================================================
+    // CHALLENGEABLE ORDERS TESTS
+    // =========================================================================
+
+    function test_ChallengeableOrders_NotAddedOnPlaceOrder() public {
+        // Placing an order should NOT add it to challengeableOrders (no nodes yet)
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        assertEq(market.getActiveOrdersCount(), 1, "order should be in activeOrders");
+        assertEq(market.getChallengeableOrdersCount(), 0, "order should NOT be in challengeableOrders");
+        assertFalse(market.isChallengeable(orderId), "order should not be challengeable");
+    }
+
+    function test_ChallengeableOrders_AddedOnFirstNode() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        assertEq(market.getChallengeableOrdersCount(), 0, "not yet challengeable");
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertEq(market.getChallengeableOrdersCount(), 1, "should be challengeable after first node");
+        assertTrue(market.isChallengeable(orderId), "order should be marked challengeable");
+    }
+
+    function test_ChallengeableOrders_NotDuplicatedOnSecondNode() public {
+        // Register two nodes with enough capacity
+        uint64 largeCapacity = TEST_CAPACITY * 2;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        vm.deal(node2, largeStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint8 replicas = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+        assertEq(market.getChallengeableOrdersCount(), 1, "one challengeable after first node");
+
+        vm.prank(node2);
+        market.executeOrder(orderId);
+        assertEq(market.getChallengeableOrdersCount(), 1, "still one challengeable after second node");
+    }
+
+    function test_ChallengeableOrders_RemovedOnCancel() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertEq(market.getChallengeableOrdersCount(), 1, "should be challengeable");
+
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        assertEq(market.getChallengeableOrdersCount(), 0, "removed from challengeable on cancel");
+        assertFalse(market.isChallengeable(orderId), "flag cleared after cancel");
+    }
+
+    function test_ChallengeableOrders_RemovedOnExpiry() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertTrue(market.isChallengeable(orderId), "should be challengeable");
+
+        // Warp past expiry
+        vm.warp(block.timestamp + (PERIOD * 2) + 1);
+
+        market.completeExpiredOrder(orderId);
+
+        assertEq(market.getChallengeableOrdersCount(), 0, "removed from challengeable on expiry");
+        assertFalse(market.isChallengeable(orderId), "flag cleared after expiry");
+    }
+
+    function test_ChallengeableOrders_RemovedWhenLastNodeQuits() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertTrue(market.isChallengeable(orderId), "should be challengeable with node assigned");
+
+        // Node quits order → last node removed
+        vm.prank(node1);
+        market.quitOrder(orderId);
+
+        assertFalse(market.isChallengeable(orderId), "no longer challengeable after last node quits");
+        assertEq(market.getChallengeableOrdersCount(), 0, "challengeable count should be 0");
+        // Order should still be in activeOrders (not expired/cancelled)
+        assertEq(market.getActiveOrdersCount(), 1, "order still active, just not challengeable");
+    }
+
+    function test_ChallengeFloodingPrevented() public {
+        // Core exploit scenario: attacker floods cheap unassigned orders
+        // to dilute the challenge pool. After fix, only assigned orders are sampled.
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        // Place one real order with a node assigned
+        vm.prank(user1);
+        uint256 realOrderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(realOrderId);
+
+        // Attacker floods 20 cheap unassigned orders
+        uint256 cheapCost = uint256(1) * uint256(1) * 1 * 1; // 1 wei minimum
+        for (uint256 i = 0; i < 20; i++) {
+            vm.prank(user2);
+            market.placeOrder{value: cheapCost}(fileMeta, 1, 1, 1, 1);
+        }
+
+        // activeOrders has 21 entries but challengeableOrders has only 1
+        assertEq(market.getActiveOrdersCount(), 21, "21 total active orders");
+        assertEq(market.getChallengeableOrdersCount(), 1, "only 1 challengeable order");
+
+        // Trigger heartbeat — should always select the real order
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        (,, address primaryProver,,,,) = market.getCurrentChallengeInfo();
+        assertEq(primaryProver, node1, "real order's node must be selected as primary prover");
+    }
+
+    function test_ChallengeableOrders_MultipleOrders_CorrectTracking() public {
+        // Test that multiple challengeable orders are tracked correctly and
+        // swap-and-pop removal works with non-trivial array state
+        uint64 largeCapacity = TEST_CAPACITY * 4;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        // Place and assign 3 orders
+        uint256[] memory orderIds = new uint256[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            vm.prank(user1);
+            orderIds[i] = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+            vm.prank(node1);
+            market.executeOrder(orderIds[i]);
+        }
+
+        assertEq(market.getChallengeableOrdersCount(), 3, "3 challengeable orders");
+
+        // Cancel the middle order — tests swap-and-pop with non-last element
+        vm.prank(user1);
+        market.cancelOrder(orderIds[1]);
+
+        assertEq(market.getChallengeableOrdersCount(), 2, "2 challengeable after cancel");
+        assertFalse(market.isChallengeable(orderIds[1]), "cancelled order not challengeable");
+        assertTrue(market.isChallengeable(orderIds[0]), "first order still challengeable");
+        assertTrue(market.isChallengeable(orderIds[2]), "third order still challengeable");
     }
 }
 

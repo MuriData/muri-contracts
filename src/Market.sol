@@ -93,6 +93,9 @@ contract FileMarket {
     mapping(uint256 => FileOrder) public orders;
     uint256[] public activeOrders; // Array of active order IDs for random selection
     mapping(uint256 => uint256) public orderIndexInActive; // Maps order ID to its index in activeOrders
+    uint256[] public challengeableOrders; // Orders with >= 1 assigned node, used for heartbeat sampling
+    mapping(uint256 => uint256) public orderIndexInChallengeable; // Maps order ID to index in challengeableOrders
+    mapping(uint256 => bool) public isChallengeable; // Whether order is currently in challengeableOrders
 
     // Node assignments
     mapping(uint256 => address[]) public orderToNodes; // order ID -> assigned nodes
@@ -234,6 +237,11 @@ contract FileMarket {
         nodeToOrders[msg.sender].push(_orderId);
         order.filled++;
 
+        // First node assigned — order becomes challengeable
+        if (order.filled == 1) {
+            _addToChallengeableOrders(_orderId);
+        }
+
         // Record when this node started storing this order
         nodeOrderStartPeriod[msg.sender][_orderId] = currentPeriod();
 
@@ -259,44 +267,77 @@ contract FileMarket {
 
         activeOrders.pop();
         delete orderIndexInActive[_orderId];
+
+        // Also remove from challengeable orders if present
+        if (isChallengeable[_orderId]) {
+            _removeFromChallengeableOrders(_orderId);
+        }
     }
 
-    // Random order selection function
-    function selectRandomOrders(uint256 _randomSeed, uint256 _count)
-        public
+    // Internal function to add order to challengeable orders (called when first node is assigned)
+    function _addToChallengeableOrders(uint256 _orderId) internal {
+        challengeableOrders.push(_orderId);
+        orderIndexInChallengeable[_orderId] = challengeableOrders.length - 1;
+        isChallengeable[_orderId] = true;
+    }
+
+    // Internal function to remove order from challengeable orders
+    function _removeFromChallengeableOrders(uint256 _orderId) internal {
+        uint256 index = orderIndexInChallengeable[_orderId];
+        uint256 lastIndex = challengeableOrders.length - 1;
+
+        if (index != lastIndex) {
+            uint256 lastOrderId = challengeableOrders[lastIndex];
+            challengeableOrders[index] = lastOrderId;
+            orderIndexInChallengeable[lastOrderId] = index;
+        }
+
+        challengeableOrders.pop();
+        delete orderIndexInChallengeable[_orderId];
+        isChallengeable[_orderId] = false;
+    }
+
+    // Internal random selection from a given array (shared logic for active and challengeable orders)
+    function _selectFromArray(uint256[] storage arr, uint256 _randomSeed, uint256 _count)
+        internal
         view
         returns (uint256[] memory selectedOrders)
     {
         require(_count > 0, "count must be positive");
 
-        uint256 totalActive = activeOrders.length;
-        if (totalActive == 0) {
+        uint256 total = arr.length;
+        if (total == 0) {
             return new uint256[](0);
         }
 
-        uint256 actualCount = _count > totalActive ? totalActive : _count;
+        uint256 actualCount = _count > total ? total : _count;
         selectedOrders = new uint256[](actualCount);
 
-        if (actualCount == totalActive) {
-            // If requesting all orders, return them all
-            for (uint256 i = 0; i < totalActive; i++) {
-                selectedOrders[i] = activeOrders[i];
+        if (actualCount == total) {
+            for (uint256 i = 0; i < total; i++) {
+                selectedOrders[i] = arr[i];
             }
         } else {
-            // Use Fisher-Yates shuffle algorithm for uniform random selection
-            uint256[] memory indices = new uint256[](totalActive);
-            for (uint256 i = 0; i < totalActive; i++) {
+            uint256[] memory indices = new uint256[](total);
+            for (uint256 i = 0; i < total; i++) {
                 indices[i] = i;
             }
 
             for (uint256 i = 0; i < actualCount; i++) {
-                uint256 randomIndex = uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (totalActive - i);
-                selectedOrders[i] = activeOrders[indices[randomIndex]];
-
-                // Swap the selected index with the last unselected one
-                indices[randomIndex] = indices[totalActive - 1 - i];
+                uint256 randomIndex = uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i);
+                selectedOrders[i] = arr[indices[randomIndex]];
+                indices[randomIndex] = indices[total - 1 - i];
             }
         }
+    }
+
+    // Random order selection function (public wrapper for backward compatibility)
+    function selectRandomOrders(uint256 _randomSeed, uint256 _count)
+        public
+        view
+        returns (uint256[] memory selectedOrders)
+    {
+        return _selectFromArray(activeOrders, _randomSeed, _count);
     }
 
     // Get active orders count
@@ -307,6 +348,16 @@ contract FileMarket {
     // Get all active order IDs
     function getActiveOrders() external view returns (uint256[] memory) {
         return activeOrders;
+    }
+
+    // Get challengeable orders count
+    function getChallengeableOrdersCount() external view returns (uint256) {
+        return challengeableOrders.length;
+    }
+
+    // Get all challengeable order IDs
+    function getChallengeableOrders() external view returns (uint256[] memory) {
+        return challengeableOrders;
     }
 
     // Get nodes assigned to an order
@@ -518,6 +569,11 @@ contract FileMarket {
                 assignedNodes.pop();
                 order.filled--;
 
+                // Last node removed — order no longer challengeable
+                if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
+                    _removeFromChallengeableOrders(_orderId);
+                }
+
                 if (order.filled < order.replicas) {
                     emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
                 }
@@ -547,6 +603,11 @@ contract FileMarket {
         }
         assignedNodes.pop();
         order.filled--;
+
+        // Last node removed — order no longer challengeable
+        if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
+            _removeFromChallengeableOrders(_orderId);
+        }
 
         if (order.filled < order.replicas) {
             emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
@@ -843,10 +904,14 @@ contract FileMarket {
             selectionCount = 1; // ensure we request at least one order
         }
 
-        // Select random orders for challenge based on dynamic selection count
-        uint256[] memory selectedOrders = selectRandomOrders(currentRandomness, selectionCount);
+        // Select random orders for challenge from challengeable orders only (orders with assigned nodes)
+        uint256[] memory selectedOrders = _selectFromArray(challengeableOrders, currentRandomness, selectionCount);
 
         if (selectedOrders.length == 0) {
+            // Advance randomness even without challengeable orders to keep the beacon moving
+            currentRandomness = uint256(
+                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
+            ) % SNARK_SCALAR_FIELD;
             lastChallengeStep = currentStep_;
             emit HeartbeatTriggered(currentRandomness, currentStep_);
             return;
@@ -1275,11 +1340,13 @@ contract FileMarket {
             uint256 currentRandomnessValue,
             uint256 lastHeartbeatStep,
             uint256 currentPeriod_,
-            uint256 currentStep_
+            uint256 currentStep_,
+            uint256 challengeableOrdersCount
         )
     {
         totalOrders = nextOrderId - 1;
         activeOrdersCount = activeOrders.length;
+        challengeableOrdersCount = challengeableOrders.length;
 
         // Calculate total escrow locked across all active orders
         for (uint256 i = 1; i < nextOrderId; i++) {
