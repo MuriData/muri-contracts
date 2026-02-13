@@ -774,6 +774,10 @@ contract FileMarket {
             uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)));
 
         currentRandomness = fallbackRandomness;
+
+        // Auto-slash secondaries before resetting state (primary already slashed above)
+        _processExpiredChallengeSlashes(msg.sender);
+
         _triggerNewHeartbeat();
 
         emit PrimaryProverFailed(primaryProver, msg.sender, fallbackRandomness);
@@ -950,6 +954,67 @@ contract FileMarket {
         }
     }
 
+    /// @notice Auto-process all pending slashes for an expired challenge before state reset.
+    /// @param _reporter Address that triggered processing (receives reporter rewards)
+    function _processExpiredChallengeSlashes(address _reporter) internal {
+        if (lastChallengeStep == 0) return;
+
+        // --- Primary prover slash ---
+        if (!primaryProofReceived && !primaryFailureReported && currentPrimaryProver != address(0)) {
+            address primaryProver = currentPrimaryProver;
+            if (nodeToProveOrderId[primaryProver] != 0 && nodeStaking.isValidNode(primaryProver)) {
+                primaryFailureReported = true;
+                uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE();
+
+                // Cap to available stake to prevent revert
+                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
+                if (severeSlashAmount > nodeStake) {
+                    severeSlashAmount = nodeStake;
+                }
+
+                if (severeSlashAmount > 0) {
+                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
+                    _distributeSlashFunds(_reporter, totalSlashed);
+                    if (forcedExit) {
+                        _handleForcedOrderExits(primaryProver);
+                    }
+                    emit NodeSlashed(primaryProver, severeSlashAmount, "failed primary proof (auto)");
+                }
+            }
+        }
+
+        // --- Secondary prover slashes ---
+        if (!secondarySlashProcessed) {
+            secondarySlashProcessed = true;
+
+            for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
+                address secondaryProver = currentSecondaryProvers[i];
+                if (!proofSubmitted[secondaryProver] && nodeToProveOrderId[secondaryProver] != 0) {
+                    if (!nodeStaking.isValidNode(secondaryProver)) {
+                        continue;
+                    }
+                    uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
+
+                    (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(secondaryProver);
+                    if (normalSlashAmount > nodeStake) {
+                        normalSlashAmount = nodeStake;
+                    }
+
+                    if (normalSlashAmount > 0) {
+                        (bool forcedExit, uint256 totalSlashed) =
+                            nodeStaking.slashNode(secondaryProver, normalSlashAmount);
+                        _distributeSlashFunds(_reporter, totalSlashed);
+                        if (forcedExit) {
+                            _handleForcedOrderExits(secondaryProver);
+                        }
+                        emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
+                    }
+                    proofSubmitted[secondaryProver] = true;
+                }
+            }
+        }
+    }
+
     /// @notice Cleanup expired orders automatically
     function _cleanupExpiredOrders() internal {
         uint256 batchSize = 10; // Process up to 10 orders per heartbeat to avoid gas limits
@@ -976,6 +1041,9 @@ contract FileMarket {
         if (currentRandomness == 0) {
             currentRandomness = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender)));
         }
+
+        // Process any pending slashes from the expired challenge before resetting state
+        _processExpiredChallengeSlashes(msg.sender);
 
         _triggerNewHeartbeat();
         _cleanupExpiredOrders();

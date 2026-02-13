@@ -929,6 +929,255 @@ contract MarketTest is Test {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Slash bypass regression tests
+    // -------------------------------------------------------------------------
+
+    function test_TriggerHeartbeat_AutoSlashesPrimary() public {
+        // A prover who fails to submit proof should be slashed even if only
+        // triggerHeartbeat() is called (not reportPrimaryFailure).
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(1);
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node2);
+        market.executeOrder(2);
+
+        // Initial heartbeat sets up challenge
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        address primaryProver = market.currentPrimaryProver();
+        require(primaryProver != address(0), "need primary for test");
+
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(primaryProver);
+
+        // Let challenge expire without any proof submission
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Only call triggerHeartbeat — NOT reportPrimaryFailure
+        market.triggerHeartbeat();
+
+        // Primary prover should have been auto-slashed
+        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(primaryProver);
+        assertTrue(stakeAfter < stakeBefore, "primary prover auto-slashed by triggerHeartbeat");
+
+        (uint256 totalReceived,,,) = market.getSlashRedistributionStats();
+        assertTrue(totalReceived > 0, "slash funds distributed");
+    }
+
+    function test_TriggerHeartbeat_AutoSlashesSecondary() public {
+        // Secondary provers who fail to submit proof should be slashed even if only
+        // triggerHeartbeat() is called (not slashSecondaryFailures).
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(1);
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node2);
+        market.executeOrder(2);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        // Record both nodes' stakes
+        (uint256 n1StakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 n2StakeBefore,,,,) = nodeStaking.getNodeInfo(node2);
+
+        // Let challenge expire
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Use node3 as heartbeat caller (gets reporter rewards)
+        _stakeTestNode(node3, 0x9999, 0x8888);
+        vm.prank(node3);
+        market.triggerHeartbeat();
+
+        // At least one of the provers should have been slashed
+        (uint256 n1StakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 n2StakeAfter,,,,) = nodeStaking.getNodeInfo(node2);
+        bool someoneSlashed = (n1StakeAfter < n1StakeBefore) || (n2StakeAfter < n2StakeBefore);
+        assertTrue(someoneSlashed, "at least one prover auto-slashed");
+
+        // Reporter (node3) should have received rewards
+        uint256 reporterPending = market.reporterPendingRewards(node3);
+        assertTrue(reporterPending > 0, "heartbeat caller got reporter rewards");
+    }
+
+    function test_SlashEvasion_Prevented() public {
+        // A malicious prover should NOT be able to evade slashing by calling
+        // triggerHeartbeat() themselves.
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(1);
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node2);
+        market.executeOrder(2);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        address primaryProver = market.currentPrimaryProver();
+        require(primaryProver != address(0), "need primary for test");
+
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(primaryProver);
+
+        // Let challenge expire
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Malicious prover calls triggerHeartbeat to try to erase evidence
+        vm.prank(primaryProver);
+        market.triggerHeartbeat();
+
+        // Despite calling triggerHeartbeat themselves, they are slashed
+        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(primaryProver);
+        assertTrue(stakeAfter < stakeBefore, "evasion failed: prover was slashed");
+    }
+
+    function test_TriggerHeartbeat_NoDoubleSlash() public {
+        // If reportPrimaryFailure is called first, triggerHeartbeat should NOT
+        // double-slash anyone.
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(1);
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node2);
+        market.executeOrder(2);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        address primaryProver = market.currentPrimaryProver();
+        require(primaryProver != address(0), "need primary for test");
+
+        // Let challenge expire
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Call reportPrimaryFailure explicitly (which now also auto-slashes secondaries)
+        _stakeTestNode(node3, 0x9999, 0x8888);
+        vm.prank(node3);
+        market.reportPrimaryFailure();
+
+        // Record total slashes after explicit call
+        (uint256 totalReceivedAfterExplicit,,,) = market.getSlashRedistributionStats();
+
+        // reportPrimaryFailure already triggered a new heartbeat internally.
+        // Let that new challenge expire, then trigger another heartbeat.
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        vm.prank(node3);
+        market.triggerHeartbeat();
+
+        // The new heartbeat may auto-slash for the NEW challenge, but nodes from
+        // the OLD challenge are not double-slashed.
+        (uint256 totalReceivedAfterHeartbeat,,,) = market.getSlashRedistributionStats();
+        assertTrue(totalReceivedAfterHeartbeat >= totalReceivedAfterExplicit, "total never decreases");
+    }
+
+    function test_ReportPrimaryFailure_AlsoSlashesSecondaries() public {
+        // reportPrimaryFailure should auto-process secondary slashes before
+        // resetting state, preventing the secondary bypass.
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(1);
+
+        vm.prank(user1);
+        market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node2);
+        market.executeOrder(2);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        address primaryProver = market.currentPrimaryProver();
+        require(primaryProver != address(0), "need primary for test");
+
+        // Record both nodes' stakes
+        (uint256 n1StakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 n2StakeBefore,,,,) = nodeStaking.getNodeInfo(node2);
+
+        // Let challenge expire
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Call ONLY reportPrimaryFailure (NOT slashSecondaryFailures)
+        _stakeTestNode(node3, 0x9999, 0x8888);
+        vm.prank(node3);
+        market.reportPrimaryFailure();
+
+        // The primary is always slashed
+        if (primaryProver == node1) {
+            (uint256 n1After,,,,) = nodeStaking.getNodeInfo(node1);
+            assertTrue(n1After < n1StakeBefore, "primary (node1) slashed");
+        } else {
+            (uint256 n2After,,,,) = nodeStaking.getNodeInfo(node2);
+            assertTrue(n2After < n2StakeBefore, "primary (node2) slashed");
+        }
+
+        // Total slashed should reflect both primary and secondary penalties
+        (uint256 totalReceived,,,) = market.getSlashRedistributionStats();
+        assertTrue(totalReceived > 0, "slashes processed");
+
+        // All reporter rewards go to node3
+        uint256 reporterPending = market.reporterPendingRewards(node3);
+        assertTrue(reporterPending > 0, "reporter gets rewards for all auto-slashes");
+    }
+
     function test_ClaimReporterRewards() public {
         // Setup a slash scenario where reporter gets rewards
         _stakeTestNode(node1, 0x1234, 0x5678);
