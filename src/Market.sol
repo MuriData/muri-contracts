@@ -1048,8 +1048,8 @@ contract FileMarket {
         // Process any pending slashes from the expired challenge before resetting state
         _processExpiredChallengeSlashes(msg.sender);
 
-        _triggerNewHeartbeat();
         _cleanupExpiredOrders();
+        _triggerNewHeartbeat();
     }
 
     /// @notice Internal version of completeExpiredOrder for heartbeat use

@@ -3199,6 +3199,99 @@ contract MarketTest is Test {
         address primaryProver = market.currentPrimaryProver();
         assertTrue(primaryProver != address(0), "primary prover should be assigned");
     }
+
+    // -------------------------------------------------------------------------
+    // Heartbeat cleanup-before-selection regression tests
+    // -------------------------------------------------------------------------
+
+    function test_HeartbeatCleansUpBeforeSelection() public {
+        // Setup: one node, one order that will expire
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 1; // 1 period = 7 days
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertEq(market.getActiveOrdersCount(), 1);
+
+        // Warp past order expiry and past challenge window
+        vm.warp(block.timestamp + PERIOD + (STEP * 3));
+        market.triggerHeartbeat();
+
+        // After heartbeat: expired order should be cleaned up
+        assertEq(market.getActiveOrdersCount(), 0, "expired order should be cleaned up");
+
+        // The challenged orders set must NOT contain the expired order
+        (,,,, uint256[] memory challengedOrders,,) = market.getCurrentChallengeInfo();
+        for (uint256 i = 0; i < challengedOrders.length; i++) {
+            assertTrue(challengedOrders[i] != orderId, "expired order must not be challenged");
+        }
+
+        // The primary prover should not be pointed at a deleted order
+        address primaryProver = market.currentPrimaryProver();
+        if (primaryProver != address(0)) {
+            // If a prover was assigned, their order should still exist
+            uint256 proverOrderId = market.nodeToProveOrderId(primaryProver);
+            (address orderOwner,,,,,,,,) = market.orders(proverOrderId);
+            assertTrue(orderOwner != address(0), "prover order must not be deleted");
+        }
+    }
+
+    function test_ExpiredOrderNotChallenged() public {
+        // Setup: two nodes, mix of expired and active orders
+        uint64 largeCapacity = TEST_CAPACITY * 4;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+
+        vm.deal(node2, largeStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+
+        // Place a short-lived order (1 period) — will expire
+        uint256 shortCost = uint256(maxSize) * 1 * price;
+        vm.prank(user1);
+        uint256 expiredOrderId = market.placeOrder{value: shortCost}(fileMeta, maxSize, 1, 1, price);
+        vm.prank(node1);
+        market.executeOrder(expiredOrderId);
+
+        // Place long-lived orders (4 periods) — will stay active
+        uint256 longCost = uint256(maxSize) * 4 * price;
+        uint256[] memory activeIds = new uint256[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            vm.prank(user1);
+            activeIds[i] = market.placeOrder{value: longCost}(fileMeta, maxSize, 4, 1, price);
+            vm.prank(i % 2 == 0 ? node1 : node2);
+            market.executeOrder(activeIds[i]);
+        }
+
+        assertEq(market.getActiveOrdersCount(), 4); // 1 expired + 3 active
+
+        // Warp past 1 period (expires the short order) but within 4 periods
+        vm.warp(block.timestamp + PERIOD + (STEP * 3));
+        market.triggerHeartbeat();
+
+        // The expired order should be gone
+        assertEq(market.getActiveOrdersCount(), 3, "only active orders remain");
+
+        // None of the challenged orders should be the expired one
+        (,,,, uint256[] memory challengedOrders,,) = market.getCurrentChallengeInfo();
+        for (uint256 i = 0; i < challengedOrders.length; i++) {
+            assertTrue(challengedOrders[i] != expiredOrderId, "expired order must not appear in challenge set");
+        }
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
