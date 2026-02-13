@@ -460,10 +460,10 @@ contract MarketTest is Test {
         market.executeOrder(orderId);
     }
 
-    function test_RevertWhen_ClaimRewardsInvalidNode() public {
-        // Try to claim rewards without being a registered node
+    function test_RevertWhen_ClaimRewardsNoRewards() public {
+        // Try to claim rewards without any accrued rewards
         vm.prank(user1);
-        vm.expectRevert("not a valid node");
+        vm.expectRevert("no rewards to claim");
         market.claimRewards();
     }
 

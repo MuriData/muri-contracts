@@ -139,6 +139,9 @@ contract FileMarket {
     bool public primaryFailureReported; // primary failure already reported for current step
     bool public secondarySlashProcessed; // secondary slashing already handled for current challenge
 
+    // Cleanup cursor for amortised expired-order scanning
+    uint256 public cleanupCursor;
+
     // Cancellation penalty tracking (placed after proof system to preserve storage layout)
     uint256 public totalCancellationPenalties; // total early-cancellation penalties distributed to nodes
 
@@ -298,6 +301,7 @@ contract FileMarket {
     }
 
     // Internal random selection from a given array (shared logic for active and challengeable orders)
+    // Uses virtual Fisher-Yates: O(K) storage reads and O(K^2) memory ops instead of O(N).
     function _selectFromArray(uint256[] storage arr, uint256 _randomSeed, uint256 _count)
         internal
         view
@@ -318,15 +322,39 @@ contract FileMarket {
                 selectedOrders[i] = arr[i];
             }
         } else {
-            uint256[] memory indices = new uint256[](total);
-            for (uint256 i = 0; i < total; i++) {
-                indices[i] = i;
-            }
+            // Virtual Fisher-Yates: track only the K swapped positions in a sparse map
+            // instead of allocating an N-sized indices array.
+            uint256[] memory mapKeys = new uint256[](actualCount);
+            uint256[] memory mapVals = new uint256[](actualCount);
+            uint256 mapLen = 0;
 
             for (uint256 i = 0; i < actualCount; i++) {
-                uint256 randomIndex = uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i);
-                selectedOrders[i] = arr[indices[randomIndex]];
-                indices[randomIndex] = indices[total - 1 - i];
+                uint256 j = (uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i)) + i;
+
+                // Lookup mapped value for j (unmapped positions map to themselves)
+                uint256 valJ = j;
+                for (uint256 k = 0; k < mapLen; k++) {
+                    if (mapKeys[k] == j) { valJ = mapVals[k]; break; }
+                }
+
+                // Lookup mapped value for i
+                uint256 valI = i;
+                for (uint256 k = 0; k < mapLen; k++) {
+                    if (mapKeys[k] == i) { valI = mapVals[k]; break; }
+                }
+
+                selectedOrders[i] = arr[valJ];
+
+                // Record swap: map[j] = valI
+                bool found = false;
+                for (uint256 k = 0; k < mapLen; k++) {
+                    if (mapKeys[k] == j) { mapVals[k] = valI; found = true; break; }
+                }
+                if (!found) {
+                    mapKeys[mapLen] = j;
+                    mapVals[mapLen] = valI;
+                    mapLen++;
+                }
             }
         }
     }
@@ -668,7 +696,6 @@ contract FileMarket {
     /// @notice Calculate and claim accumulated rewards for a node from order escrows
     function claimRewards() external nonReentrant {
         address node = msg.sender;
-        require(nodeStaking.isValidNode(node), "not a valid node");
 
         uint256 activeClaimable = _settleActiveOrders(node);
         uint256 pendingClaimable = nodePendingRewards[node];
@@ -1098,22 +1125,43 @@ contract FileMarket {
         }
     }
 
-    /// @notice Cleanup expired orders automatically
+    /// @notice Cleanup expired orders automatically using a persistent cursor.
+    /// Scans at most one full cycle (original length) per call, processing up to batchSize.
+    /// The cursor persists across heartbeats so each call resumes where the last left off.
     function _cleanupExpiredOrders() internal {
-        uint256 batchSize = 10; // Process up to 10 orders per heartbeat to avoid gas limits
-        uint256 processed = 0;
-        uint256 i = 0;
+        uint256 len = activeOrders.length;
+        if (len == 0) {
+            cleanupCursor = 0;
+            return;
+        }
 
-        while (i < activeOrders.length && processed < batchSize) {
+        uint256 batchSize = 10;
+        uint256 processed = 0;
+        uint256 checked = 0;
+        uint256 startLen = len; // cap checks at original length to prevent infinite loops
+
+        if (cleanupCursor >= len) cleanupCursor = 0;
+        uint256 i = cleanupCursor;
+
+        while (checked < startLen && processed < batchSize) {
+            if (len == 0) break;
+
             uint256 activeOrderId = activeOrders[i];
             if (isOrderExpired(activeOrderId)) {
                 _completeExpiredOrderInternal(activeOrderId);
                 processed++;
-                // Don't increment i — array shifted left after removal
+                // swap-and-pop: re-check position i (new element swapped in)
+                len = activeOrders.length;
+                if (len == 0) break;
+                if (i >= len) i = 0;
             } else {
                 i++;
+                if (i >= len) i = 0;
             }
+            checked++;
         }
+
+        cleanupCursor = (len == 0) ? 0 : i;
     }
 
     /// @notice Manual heartbeat trigger (can be called by anyone if no challenge active)
