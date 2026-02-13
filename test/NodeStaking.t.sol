@@ -793,6 +793,55 @@ contract NodeStakingTest is Test {
         assertFalse(nodeStaking.isValidNode(node1));
     }
 
+    // ===== DECREASE CAPACITY TO ZERO — NODE LIST CLEANUP =====
+
+    function test_DecreaseCapacity_ToZero_RemovesFromNodeList() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        // Decrease capacity all the way to zero
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(cap);
+
+        // Node should be fully removed from nodeList and state
+        (uint256 s, uint64 c, uint64 u,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(s, 0, "stake cleared");
+        assertEq(c, 0, "capacity cleared");
+        assertEq(u, 0, "used cleared");
+        assertFalse(nodeStaking.isValidNode(node1), "no longer valid");
+
+        (uint256 totalNodes, uint256 totalCapStaked, uint256 totalCapUsed) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 0, "nodeList empty");
+        assertEq(totalCapStaked, 0);
+        assertEq(totalCapUsed, 0);
+    }
+
+    function test_DecreaseCapacity_ToZero_ThenRestake_NoDuplicate() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        // Decrease to zero
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(cap);
+
+        // Re-stake the same node
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0xaaaa, 0xbbbb);
+
+        // nodeList should have exactly 1 entry (no duplicate)
+        assertEq(nodeStaking.nodeList(0), node1, "re-staked node in list");
+
+        (uint256 totalNodes, uint256 totalCapStaked,) = nodeStaking.getNetworkStats();
+        assertEq(totalNodes, 1, "exactly one node");
+        assertEq(totalCapStaked, cap, "capacity matches single node");
+    }
+
     // Allow test contract (acting as market) to receive ETH from slashNode
     receive() external payable {}
 

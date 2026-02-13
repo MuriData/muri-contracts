@@ -121,6 +121,20 @@ contract NodeStaking {
         require(success, "transfer failed");
 
         emit NodeCapacityDecreased(msg.sender, stakeToRelease, info.capacity);
+
+        // If capacity reached zero, remove from nodeList to prevent stale/duplicate entries
+        if (info.capacity == 0) {
+            uint256 idx = nodeIndexInList[msg.sender];
+            uint256 lastIdx = nodeList.length - 1;
+            if (idx != lastIdx) {
+                address lastNode = nodeList[lastIdx];
+                nodeList[idx] = lastNode;
+                nodeIndexInList[lastNode] = idx;
+            }
+            nodeList.pop();
+            delete nodeIndexInList[msg.sender];
+            delete nodes[msg.sender];
+        }
     }
 
     /// @notice Fully exit as a storage node and withdraw all stake. Can only be called when no data is stored.
