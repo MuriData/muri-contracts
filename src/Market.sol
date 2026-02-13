@@ -127,6 +127,7 @@ contract FileMarket {
     uint256[] public currentChallengedOrders; // current orders being challenged
     uint256 public constant CHALLENGE_COUNT = 5; // orders to challenge per heartbeat
     uint256 public constant SECONDARY_ALPHA = 2; // alpha multiplier for secondary provers
+    uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
     // Proof submission tracking (reset each heartbeat)
     mapping(address => bool) public proofSubmitted; // current round proof submissions
@@ -773,7 +774,7 @@ contract FileMarket {
         uint256 fallbackRandomness =
             uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)));
 
-        currentRandomness = fallbackRandomness;
+        currentRandomness = fallbackRandomness % SNARK_SCALAR_FIELD;
 
         // Auto-slash secondaries before resetting state (primary already slashed above)
         _processExpiredChallengeSlashes(msg.sender);
@@ -873,8 +874,9 @@ contract FileMarket {
             currentPrimaryProver = address(0);
 
             // Advance randomness even without a selection to keep the beacon moving
-            currentRandomness =
-                uint256(keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender)));
+            currentRandomness = uint256(
+                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
+            ) % SNARK_SCALAR_FIELD;
             lastChallengeStep = currentStep_;
             emit HeartbeatTriggered(currentRandomness, currentStep_);
             return;
@@ -1039,7 +1041,8 @@ contract FileMarket {
 
         // If no randomness set, initialize with block data
         if (currentRandomness == 0) {
-            currentRandomness = uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender)));
+            currentRandomness =
+                uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % SNARK_SCALAR_FIELD;
         }
 
         // Process any pending slashes from the expired challenge before resetting state

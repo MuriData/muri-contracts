@@ -3063,6 +3063,142 @@ contract MarketTest is Test {
         vm.expectRevert("max orders per node reached");
         market.executeOrder(orderId51);
     }
+
+    // -------------------------------------------------------------------------
+    // Randomness Field-Reduction Tests (BN254 SNARK_SCALAR_FIELD)
+    // -------------------------------------------------------------------------
+
+    uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+
+    function test_RandomnessAlwaysInField_TriggerHeartbeat() public {
+        // After triggerHeartbeat initializes randomness, it must be < SNARK_SCALAR_FIELD
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        uint256 r = market.currentRandomness();
+        assertTrue(r > 0, "randomness should be non-zero");
+        assertTrue(r < SNARK_SCALAR_FIELD, "randomness must be < SNARK_SCALAR_FIELD");
+    }
+
+    function test_RandomnessAlwaysInField_ReportPrimaryFailure() public {
+        // Setup: two nodes, two orders, trigger heartbeat, let challenge expire, report failure
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint8 replicas = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId1 = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+        vm.prank(node1);
+        market.executeOrder(orderId1);
+
+        vm.prank(user1);
+        uint256 orderId2 = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+        vm.prank(node2);
+        market.executeOrder(orderId2);
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        // Let challenge period expire
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        address primaryProver = market.currentPrimaryProver();
+        require(primaryProver != address(0), "primary must be assigned");
+
+        // Use a third node as reporter
+        _stakeTestNode(node3, 0x9999, 0x8888);
+        vm.prank(node3);
+        market.reportPrimaryFailure();
+
+        uint256 r = market.currentRandomness();
+        assertTrue(r < SNARK_SCALAR_FIELD, "randomness must be < SNARK_SCALAR_FIELD after reportPrimaryFailure");
+    }
+
+    function test_RandomnessAlwaysInField_NoValidOrders() public {
+        // Place order but do NOT assign any node → no-valid-orders branch in _triggerNewHeartbeat
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        vm.prank(user1);
+        market.placeOrder{value: 1 ether}(fileMeta, 512, 2, 1, 1e12);
+
+        // First heartbeat initializes randomness
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+        uint256 r1 = market.currentRandomness();
+        assertTrue(r1 < SNARK_SCALAR_FIELD, "initial randomness must be < SNARK_SCALAR_FIELD");
+
+        // Advance beyond challenge window → second heartbeat hits no-valid-orders branch
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+        market.triggerHeartbeat();
+
+        uint256 r2 = market.currentRandomness();
+        assertTrue(r2 < SNARK_SCALAR_FIELD, "no-valid-orders randomness must be < SNARK_SCALAR_FIELD");
+        assertTrue(r2 != r1, "randomness should change");
+    }
+
+    function test_RandomnessReduction_PreservesEntropy() public {
+        // Reduced randomness should be non-zero and vary across different blocks
+        uint256[] memory results = new uint256[](5);
+
+        for (uint256 i = 0; i < 5; i++) {
+            vm.warp(block.timestamp + 31 + (i * 61)); // different block timestamps
+            vm.prevrandao(bytes32(uint256(0xdead0000 + i))); // different prevrandao values
+
+            // Deploy fresh market each iteration to reset randomness to 0
+            FileMarket freshMarket = new FileMarket();
+            freshMarket.triggerHeartbeat();
+            results[i] = freshMarket.currentRandomness();
+
+            assertTrue(results[i] > 0, "randomness should be non-zero");
+            assertTrue(results[i] < SNARK_SCALAR_FIELD, "randomness must be in field");
+        }
+
+        // Check at least some variation (not all identical)
+        bool hasVariation = false;
+        for (uint256 i = 1; i < 5; i++) {
+            if (results[i] != results[0]) {
+                hasVariation = true;
+                break;
+            }
+        }
+        assertTrue(hasVariation, "reduced randomness should vary across blocks");
+    }
+
+    function test_SubmitProof_WorksWithReducedRandomness() public {
+        // Verify that after triggerHeartbeat the randomness is within the BN254 field
+        // so that submitProof would not revert with PublicInputNotInField.
+        // (Full proof submission requires a valid Groth16 proof, so we just verify the
+        // precondition: currentRandomness < SNARK_SCALAR_FIELD.)
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint8 replicas = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, replicas, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        vm.warp(block.timestamp + 31);
+        market.triggerHeartbeat();
+
+        uint256 r = market.currentRandomness();
+        assertTrue(r < SNARK_SCALAR_FIELD, "randomness fed to submitProof must be < SNARK_SCALAR_FIELD");
+
+        // Confirm a primary prover was actually assigned with this in-field randomness
+        address primaryProver = market.currentPrimaryProver();
+        assertTrue(primaryProver != address(0), "primary prover should be assigned");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
