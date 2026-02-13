@@ -466,7 +466,7 @@ contract FileMarket {
 
         // Apply slash to node's stake (no reporter reward for voluntary quit)
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
-        _distributeSlashFunds(address(0), totalSlashed);
+        _distributeSlashFunds(address(0), msg.sender, totalSlashed);
 
         // If slashing caused forced order exits, handle them
         if (forcedOrderExit) {
@@ -489,7 +489,7 @@ contract FileMarket {
 
         // No reporter reward for authority slashes
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, _slashAmount);
-        _distributeSlashFunds(address(0), totalSlashed);
+        _distributeSlashFunds(address(0), _node, totalSlashed);
 
         if (forcedOrderExit) {
             _handleForcedOrderExits(_node);
@@ -832,7 +832,7 @@ contract FileMarket {
         }
 
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
-        _distributeSlashFunds(msg.sender, totalSlashed);
+        _distributeSlashFunds(msg.sender, primaryProver, totalSlashed);
         if (forcedExit) {
             _handleForcedOrderExits(primaryProver);
         }
@@ -878,7 +878,7 @@ contract FileMarket {
 
                 if (normalSlashAmount > 0) {
                     (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
-                    _distributeSlashFunds(msg.sender, totalSlashed);
+                    _distributeSlashFunds(msg.sender, secondaryProver, totalSlashed);
                     if (forcedExit) {
                         _handleForcedOrderExits(secondaryProver);
                     }
@@ -1057,7 +1057,7 @@ contract FileMarket {
 
                 if (severeSlashAmount > 0) {
                     (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
-                    _distributeSlashFunds(_reporter, totalSlashed);
+                    _distributeSlashFunds(_reporter, primaryProver, totalSlashed);
                     if (forcedExit) {
                         _handleForcedOrderExits(primaryProver);
                     }
@@ -1086,7 +1086,7 @@ contract FileMarket {
                     if (normalSlashAmount > 0) {
                         (bool forcedExit, uint256 totalSlashed) =
                             nodeStaking.slashNode(secondaryProver, normalSlashAmount);
-                        _distributeSlashFunds(_reporter, totalSlashed);
+                        _distributeSlashFunds(_reporter, secondaryProver, totalSlashed);
                         if (forcedExit) {
                             _handleForcedOrderExits(secondaryProver);
                         }
@@ -1221,14 +1221,15 @@ contract FileMarket {
 
     /// @notice Distribute slashed funds: reporter gets a percentage, rest is burned
     /// @param reporter The address that reported the failure (address(0) for no reward)
+    /// @param slashedNode The address of the node being slashed (reporter reward skipped if same as reporter)
     /// @param totalSlashed The total slashed amount received from NodeStaking
-    function _distributeSlashFunds(address reporter, uint256 totalSlashed) internal {
+    function _distributeSlashFunds(address reporter, address slashedNode, uint256 totalSlashed) internal {
         if (totalSlashed == 0) return;
 
         totalSlashedReceived += totalSlashed;
 
         uint256 reporterReward = 0;
-        if (reporter != address(0)) {
+        if (reporter != address(0) && reporter != slashedNode) {
             reporterReward = totalSlashed * reporterRewardBps / 10000;
             if (reporterReward > 0) {
                 reporterPendingRewards[reporter] += reporterReward;
