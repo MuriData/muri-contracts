@@ -301,6 +301,29 @@ contract FileMarket {
         isChallengeable[_orderId] = false;
     }
 
+    /// @notice Check if a node has an unresolved proof obligation from the current challenge.
+    /// Returns true if the node is a primary or secondary prover that hasn't submitted proof
+    /// and hasn't been slashed yet. Used to prevent provers from escaping slashing by quitting.
+    function _isUnresolvedProver(address _node) internal view returns (bool) {
+        if (lastChallengeStep == 0) return false;
+
+        // Primary prover with unresolved obligation
+        if (_node == currentPrimaryProver && !proofSubmitted[_node] && !primaryFailureReported) {
+            return true;
+        }
+
+        // Secondary prover with unresolved obligation
+        if (!secondarySlashProcessed && !proofSubmitted[_node]) {
+            for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
+                if (currentSecondaryProvers[i] == _node) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// @notice Check if an order is currently under active challenge
     function _isOrderUnderActiveChallenge(uint256 _orderId) internal view returns (bool) {
         if (lastChallengeStep == 0 || currentStep() > lastChallengeStep + 1) {
@@ -499,6 +522,7 @@ contract FileMarket {
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order already expired");
+        require(!_isUnresolvedProver(msg.sender), "active prover cannot quit");
 
         // Verify node is assigned to this order
         address[] storage assignedNodes = orderToNodes[_orderId];

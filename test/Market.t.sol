@@ -3746,6 +3746,211 @@ contract MarketTest is Test {
         // hitting the block gas limit even with a large activeOrders array.
         assertTrue(gasUsed < 5_000_000, "heartbeat gas should be bounded");
     }
+
+    // -------------------------------------------------------------------------
+    // Fix: Active provers cannot quit to evade slashing
+    // -------------------------------------------------------------------------
+
+    /// @notice Primary prover must not be able to call quitOrder while they have
+    /// an unresolved proof obligation.
+    function test_QuitOrder_RevertForActivePrimaryProver() public {
+        // Stake node1 with enough capacity for 1 order
+        _stakeTestNode(node1, 0xAAAA, 0xBBBB);
+
+        // Place order, node1 executes
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+        vm.deal(user1, totalCost);
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Trigger heartbeat → node1 is the only node with orders, must be primary
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        address pp = market.currentPrimaryProver();
+        assertEq(pp, node1, "node1 should be primary prover");
+
+        // node1 tries to quit → should revert
+        vm.prank(node1);
+        vm.expectRevert("active prover cannot quit");
+        market.quitOrder(orderId);
+    }
+
+    /// @notice Secondary prover must not be able to call quitOrder while they
+    /// have an unresolved proof obligation.
+    function test_QuitOrder_RevertForActiveSecondaryProver() public {
+        // Need at least 2 nodes with orders so one becomes primary, other secondary
+        uint64 largeCapacity = TEST_CAPACITY * 2;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xAAAA, 0xBBBB);
+
+        vm.deal(node2, largeStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xCCCC, 0xDDDD);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+
+        // Place 3 orders for sufficient secondary prover selection
+        uint256[] memory orderIds = new uint256[](3);
+        for (uint256 i = 0; i < 3; i++) {
+            vm.deal(user1, totalCost);
+            vm.prank(user1);
+            orderIds[i] = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+            vm.prank(i % 2 == 0 ? node1 : node2);
+            market.executeOrder(orderIds[i]);
+        }
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        address pp = market.currentPrimaryProver();
+        // The other node is a secondary (if assigned)
+        address secondaryNode = (pp == node1) ? node2 : node1;
+
+        // Check if secondaryNode is actually a secondary prover
+        (,,, address[] memory secondaries,,,) = market.getCurrentChallengeInfo();
+        bool isSecondary = false;
+        for (uint256 i = 0; i < secondaries.length; i++) {
+            if (secondaries[i] == secondaryNode) {
+                isSecondary = true;
+                break;
+            }
+        }
+
+        if (isSecondary) {
+            // Find an order assigned to the secondary node
+            uint256[] memory secOrders = market.getNodeOrders(secondaryNode);
+            require(secOrders.length > 0, "secondary must have orders");
+
+            vm.prank(secondaryNode);
+            vm.expectRevert("active prover cannot quit");
+            market.quitOrder(secOrders[0]);
+        }
+    }
+
+    /// @notice A non-prover node should still be able to quit normally during
+    /// an active challenge (regression test).
+    function test_QuitOrder_AllowedForNonProver() public {
+        // Stake 3 nodes
+        _stakeTestNode(node1, 0xAAAA, 0xBBBB);
+        _stakeTestNode(node2, 0xCCCC, 0xDDDD);
+        _stakeTestNode(node3, 0xEEEE, 0xFFFF);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+
+        // Place 1 order executed by node1 (will be challenged)
+        vm.deal(user1, totalCost);
+        vm.prank(user1);
+        uint256 orderId1 = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId1);
+
+        // Place separate order executed by node3 (not involved in challenge)
+        vm.deal(user2, totalCost);
+        vm.prank(user2);
+        uint256 orderId2 = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node3);
+        market.executeOrder(orderId2);
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        address pp = market.currentPrimaryProver();
+        (,,, address[] memory secondaries,,,) = market.getCurrentChallengeInfo();
+
+        // Determine a non-prover among node1, node2, node3
+        // node2 has no orders so won't be selected. node3 might or might not be.
+        // Find the node that is neither primary nor secondary and has an order.
+        address nonProver = address(0);
+        uint256 nonProverOrder = 0;
+
+        address[2] memory candidates = [node1, node3];
+        uint256[2] memory candidateOrders = [orderId1, orderId2];
+
+        for (uint256 c = 0; c < 2; c++) {
+            bool isProver = (candidates[c] == pp);
+            for (uint256 s = 0; s < secondaries.length && !isProver; s++) {
+                if (secondaries[s] == candidates[c]) isProver = true;
+            }
+            if (!isProver) {
+                nonProver = candidates[c];
+                nonProverOrder = candidateOrders[c];
+                break;
+            }
+        }
+
+        // If we found a non-prover node, verify it can quit
+        if (nonProver != address(0)) {
+            vm.prank(nonProver);
+            market.quitOrder(nonProverOrder); // should NOT revert
+        }
+    }
+
+    /// @notice End-to-end: primary prover cannot evade slashing by quitting.
+    /// The prover is blocked from quitting, and after the challenge expires the
+    /// prover gets properly slashed via reportPrimaryFailure.
+    function test_ProverCannotEvadeSlash_EndToEnd() public {
+        // Stake node1 (primary) and node2 (reporter)
+        _stakeTestNode(node1, 0xAAAA, 0xBBBB);
+        _stakeTestNode(node2, 0xCCCC, 0xDDDD);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+        vm.deal(user1, totalCost);
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Record node1's stake before challenge
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        assertTrue(stakeBefore > 0, "node1 should have stake");
+
+        // Trigger heartbeat → node1 becomes primary prover
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+        assertEq(market.currentPrimaryProver(), node1, "node1 is primary");
+
+        // Attack step 1: node1 tries to quit → blocked
+        vm.prank(node1);
+        vm.expectRevert("active prover cannot quit");
+        market.quitOrder(orderId);
+
+        // Challenge window expires without proof submission
+        vm.warp(block.timestamp + (STEP * 2) + 1);
+
+        // Attack step 2: node1 tries to quit after expiry but before report → still blocked
+        // (primaryFailureReported is still false)
+        vm.prank(node1);
+        vm.expectRevert("active prover cannot quit");
+        market.quitOrder(orderId);
+
+        // Reporter triggers failure report → node1 gets slashed
+        vm.prank(node2);
+        market.reportPrimaryFailure();
+
+        // Verify node1 was actually slashed (stake reduced or removed)
+        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        assertTrue(stakeAfter < stakeBefore, "node1 should have been slashed");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
