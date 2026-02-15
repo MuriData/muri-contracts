@@ -181,6 +181,7 @@ contract FileMarket {
         uint8 _replicas,
         uint256 _pricePerBytePerPeriod
     ) external payable nonReentrant returns (uint256 orderId) {
+        require(_file.root > 0 && _file.root < SNARK_SCALAR_FIELD, "root not in Fr");
         require(_maxSize > 0, "invalid size");
         require(_periods > 0, "invalid periods");
         require(_replicas > 0, "invalid replicas");
@@ -1063,6 +1064,10 @@ contract FileMarket {
                 address secondaryNode = orderNodes[r % orderNodes.length];
                 // Skip if this node is already the primary prover
                 if (secondaryNode == primary) {
+                    continue;
+                }
+                // Skip if this node was already assigned (primary or earlier secondary)
+                if (nodeToProveOrderId[secondaryNode] != 0) {
                     continue;
                 }
                 currentSecondaryProvers.push(secondaryNode);

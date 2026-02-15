@@ -1312,6 +1312,29 @@ contract MarketTest is Test {
     // placeOrder validation coverage
     // -------------------------------------------------------------------------
 
+    function test_PlaceOrder_RevertRootZero() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: 0, uri: FILE_URI});
+        vm.prank(user1);
+        vm.expectRevert("root not in Fr");
+        market.placeOrder{value: 1 ether}(fileMeta, 1024, 4, 1, 1e12);
+    }
+
+    function test_PlaceOrder_RevertRootAtField() public {
+        // SNARK_SCALAR_FIELD itself is out of range
+        uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: R, uri: FILE_URI});
+        vm.prank(user1);
+        vm.expectRevert("root not in Fr");
+        market.placeOrder{value: 1 ether}(fileMeta, 1024, 4, 1, 1e12);
+    }
+
+    function test_PlaceOrder_RevertRootAboveField() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: type(uint256).max, uri: FILE_URI});
+        vm.prank(user1);
+        vm.expectRevert("root not in Fr");
+        market.placeOrder{value: 1 ether}(fileMeta, 1024, 4, 1, 1e12);
+    }
+
     function test_PlaceOrder_RevertInvalidSize() public {
         FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         vm.prank(user1);
@@ -3950,6 +3973,104 @@ contract MarketTest is Test {
         // Verify node1 was actually slashed (stake reduced or removed)
         (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
         assertTrue(stakeAfter < stakeBefore, "node1 should have been slashed");
+    }
+
+    // -------------------------------------------------------------------------
+    // Fix: Deduplicate secondary prover selection
+    // -------------------------------------------------------------------------
+
+    /// @notice When one node serves many orders, it must appear at most once in
+    /// currentSecondaryProvers after a heartbeat.
+    function test_SecondaryProvers_NoDuplicates() public {
+        // node1: large capacity, serves many orders
+        uint64 largeCapacity = TEST_CAPACITY * 8;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+
+        // node2: normal capacity, serves one order (ensures a different primary can be picked)
+        _stakeTestNode(node2, 0xAAAA, 0xBBBB);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 128;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+
+        // Place 6 orders: first served by node2, rest by node1
+        vm.prank(user1);
+        uint256 firstOrder = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node2);
+        market.executeOrder(firstOrder);
+
+        for (uint256 i = 1; i < 6; i++) {
+            vm.prank(user1);
+            uint256 oid = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+            vm.prank(node1);
+            market.executeOrder(oid);
+        }
+
+        // Trigger heartbeat
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        // Retrieve secondary provers and assert no duplicates
+        (,, address primaryProver, address[] memory secondaryProvers,,,) = market.getCurrentChallengeInfo();
+        // Primary should not appear in secondaries (covered by existing test, but verify here too)
+        for (uint256 i = 0; i < secondaryProvers.length; i++) {
+            assertTrue(secondaryProvers[i] != primaryProver, "primary in secondary list");
+            // Check for duplicates against all later entries
+            for (uint256 j = i + 1; j < secondaryProvers.length; j++) {
+                assertTrue(secondaryProvers[i] != secondaryProvers[j], "duplicate secondary prover");
+            }
+        }
+    }
+
+    /// @notice Same dedup invariant holds across multiple heartbeat cycles with
+    /// different randomness seeds.
+    function test_SecondaryProvers_NoDuplicates_RepeatedHeartbeats() public {
+        // node1: large capacity, serves many orders
+        uint64 largeCapacity = TEST_CAPACITY * 8;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+
+        // node2: normal capacity
+        _stakeTestNode(node2, 0xAAAA, 0xBBBB);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 128;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+
+        // Place 6 orders: first served by node2, rest by node1
+        vm.prank(user1);
+        uint256 firstOrder = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node2);
+        market.executeOrder(firstOrder);
+
+        for (uint256 i = 1; i < 6; i++) {
+            vm.prank(user1);
+            uint256 oid = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+            vm.prank(node1);
+            market.executeOrder(oid);
+        }
+
+        // Run 5 heartbeat cycles, each with new randomness
+        for (uint256 round = 0; round < 5; round++) {
+            // Advance past the current challenge window
+            vm.warp(block.timestamp + (STEP * 2) + 1);
+            market.triggerHeartbeat();
+
+            (,, address primaryProver, address[] memory secondaryProvers,,,) = market.getCurrentChallengeInfo();
+            for (uint256 i = 0; i < secondaryProvers.length; i++) {
+                assertTrue(secondaryProvers[i] != primaryProver, "primary in secondary list");
+                for (uint256 j = i + 1; j < secondaryProvers.length; j++) {
+                    assertTrue(secondaryProvers[i] != secondaryProvers[j], "duplicate secondary prover");
+                }
+            }
+        }
     }
 }
 
