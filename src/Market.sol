@@ -543,6 +543,12 @@ contract FileMarket {
         uint256 slashPeriods = QUIT_SLASH_PERIODS < remainingPeriods ? QUIT_SLASH_PERIODS : remainingPeriods;
         uint256 slashAmount = uint256(order.maxSize) * order.price * slashPeriods;
 
+        // Cap to available stake to prevent revert
+        (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(msg.sender);
+        if (slashAmount > nodeStake) {
+            slashAmount = nodeStake;
+        }
+
         // Apply slash to node's stake (no reporter reward for voluntary quit)
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
         _distributeSlashFunds(address(0), msg.sender, totalSlashed);

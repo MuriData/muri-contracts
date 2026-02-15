@@ -1567,6 +1567,37 @@ contract MarketTest is Test {
         market.quitOrder(orderId);
     }
 
+    function test_QuitOrder_SlashCappedToStake() public {
+        // Use a high price so the computed slash exceeds node stake
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 1024;
+        uint16 periods = 4;
+        // Very high price: slash = maxSize * price * min(3, remaining) will exceed TEST_STAKE
+        uint256 price = 1 ether;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.deal(user1, totalCost);
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        // Confirm the uncapped slash would exceed stake
+        uint256 rawSlash = uint256(maxSize) * price * 3; // QUIT_SLASH_PERIODS = 3
+        assertTrue(rawSlash > stakeBefore, "test setup: slash should exceed stake");
+
+        // quitOrder must succeed (not revert) thanks to the cap
+        vm.prank(node1);
+        market.quitOrder(orderId);
+
+        // Node should have been removed from the order
+        address[] memory orderNodes = market.getOrderNodes(orderId);
+        assertEq(orderNodes.length, 0, "node removed after quit");
+    }
+
     function test_QuitOrder_NormalWithoutForcedExit() public {
         // Node has large capacity, quit slashes only a small amount → no forced exit
         uint64 largeCapacity = TEST_CAPACITY * 2;
