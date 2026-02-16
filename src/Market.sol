@@ -149,6 +149,9 @@ contract FileMarket {
     // Pull-payment refunds (placed after totalCancellationPenalties to preserve storage layout)
     mapping(address => uint256) public pendingRefunds;
 
+    // Challenge initialization flag (placed at end to preserve storage layout)
+    bool public challengeInitialized; // true after the first heartbeat has been issued
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -306,7 +309,7 @@ contract FileMarket {
     /// Returns true if the node is a primary or secondary prover that hasn't submitted proof
     /// and hasn't been slashed yet. Used to prevent provers from escaping slashing by quitting.
     function _isUnresolvedProver(address _node) internal view returns (bool) {
-        if (lastChallengeStep == 0) return false;
+        if (!challengeInitialized) return false;
 
         // Primary prover with unresolved obligation
         if (_node == currentPrimaryProver && !proofSubmitted[_node] && !primaryFailureReported) {
@@ -327,7 +330,7 @@ contract FileMarket {
 
     /// @notice Check if an order is currently under active challenge
     function _isOrderUnderActiveChallenge(uint256 _orderId) internal view returns (bool) {
-        if (lastChallengeStep == 0 || currentStep() > lastChallengeStep + 1) {
+        if (!challengeInitialized || currentStep() > lastChallengeStep + 1) {
             return false;
         }
         for (uint256 i = 0; i < currentChallengedOrders.length; i++) {
@@ -981,6 +984,7 @@ contract FileMarket {
         _cleanupExpiredOrders();
 
         uint256 currentStep_ = currentStep();
+        challengeInitialized = true;
 
         // Reset proof tracking
         _resetProofTracking();
@@ -1133,7 +1137,7 @@ contract FileMarket {
     /// @notice Auto-process all pending slashes for an expired challenge before state reset.
     /// @param _reporter Address that triggered processing (receives reporter rewards)
     function _processExpiredChallengeSlashes(address _reporter) internal {
-        if (lastChallengeStep == 0) return;
+        if (!challengeInitialized) return;
 
         // --- Primary prover slash ---
         if (!primaryProofReceived && !primaryFailureReported && currentPrimaryProver != address(0)) {
@@ -1233,7 +1237,7 @@ contract FileMarket {
 
     /// @notice Manual heartbeat trigger (can be called by anyone if no challenge active)
     function triggerHeartbeat() external nonReentrant {
-        require(currentStep() > lastChallengeStep + 1 || lastChallengeStep == 0, "challenge still active");
+        require(currentStep() > lastChallengeStep + 1 || !challengeInitialized, "challenge still active");
 
         // If no randomness set, initialize with block data
         if (currentRandomness == 0) {
@@ -1303,7 +1307,7 @@ contract FileMarket {
         secondaryProvers = currentSecondaryProvers;
         challengedOrders = currentChallengedOrders;
         primarySubmitted = primaryProofReceived;
-        challengeActive = (currentStep() <= lastChallengeStep + 1) && (lastChallengeStep > 0);
+        challengeActive = (currentStep() <= lastChallengeStep + 1) && challengeInitialized;
     }
 
     /// @notice Check if a node has submitted proof for current challenge
@@ -1557,7 +1561,7 @@ contract FileMarket {
         totalChallengeRounds = lastChallengeStep;
         currentStepValue = currentStep();
         lastChallengeStepValue = lastChallengeStep;
-        challengeActive = (currentStepValue <= lastChallengeStep + 1) && (lastChallengeStep > 0);
+        challengeActive = (currentStepValue <= lastChallengeStep + 1) && challengeInitialized;
         currentPrimaryProverAddress = currentPrimaryProver;
         challengedOrdersCount = currentChallengedOrders.length;
         currentChallengedOrderIds = currentChallengedOrders;

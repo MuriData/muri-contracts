@@ -2134,6 +2134,7 @@ contract MarketTest is Test {
     uint256 constant SLOT_LAST_CHALLENGE_STEP = 27;
     uint256 constant SLOT_CURRENT_PRIMARY_PROVER = 28;
     uint256 constant SLOT_NODE_TO_PROVE_ORDER_ID = 32;
+    uint256 constant SLOT_CHALLENGE_INITIALIZED = 37;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;
@@ -2154,6 +2155,8 @@ contract MarketTest is Test {
         // Set lastChallengeStep to currentStep - 1 so challenge is "active"
         uint256 cs = market.currentStep();
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 1));
+        // Mark challenge system as initialized
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         // Set primary prover
         vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(prover))));
         // Set nodeToProveOrderId[prover] = orderId
@@ -2285,6 +2288,7 @@ contract MarketTest is Test {
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(ZK_RANDOMNESS));
         // Set lastChallengeStep to cs - 3 so currentStep > lastChallengeStep + 1
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 3));
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(node1))));
         bytes32 mapSlot = keccak256(abi.encode(node1, SLOT_NODE_TO_PROVE_ORDER_ID));
         vm.store(address(market), mapSlot, bytes32(orderId));
@@ -2393,6 +2397,7 @@ contract MarketTest is Test {
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(ZK_RANDOMNESS));
         uint256 cs = market.currentStep();
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 1));
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         // Primary is node1
         vm.store(address(market), bytes32(SLOT_CURRENT_PRIMARY_PROVER), bytes32(uint256(uint160(node1))));
 
@@ -2459,6 +2464,7 @@ contract MarketTest is Test {
         vm.warp(block.timestamp + STEP * 5);
         uint256 cs = market.currentStep();
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 2));
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(uint256(42)));
 
         // Set secondaryProvers = [node2]
@@ -2506,6 +2512,7 @@ contract MarketTest is Test {
         vm.warp(block.timestamp + STEP * 5);
         uint256 cs = market.currentStep();
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 2));
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(uint256(42)));
 
         // Set secondaryProvers = [node2]
@@ -3406,6 +3413,44 @@ contract MarketTest is Test {
     }
 
     // =========================================================================
+    // Regression: step 0 challenge must not bypass protections
+    // =========================================================================
+
+    /// @notice A heartbeat issued at step 0 (within the first 30s) must still be
+    /// treated as an active challenge — triggerHeartbeat should revert, and
+    /// _isOrderUnderActiveChallenge should return true.
+    function test_ChallengeAtStepZero_StillActive() public {
+        // We are at genesis (block.timestamp == GENESIS_TS), so currentStep == 0
+        assertEq(market.currentStep(), 0);
+
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * 4 * price;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(meta, maxSize, 4, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Trigger heartbeat at step 0 — should succeed
+        market.triggerHeartbeat();
+
+        // lastChallengeStep == 0 but challengeInitialized == true
+        assertEq(market.lastChallengeStep(), 0);
+        assertTrue(market.challengeInitialized());
+
+        // getCurrentChallengeInfo should report the challenge as active
+        (,,,,, bool primarySubmitted, bool challengeActive) = market.getCurrentChallengeInfo();
+        assertTrue(challengeActive, "step-0 challenge should be active");
+        assertFalse(primarySubmitted);
+
+        // A second triggerHeartbeat should revert because the challenge is still active
+        vm.expectRevert("challenge still active");
+        market.triggerHeartbeat();
+    }
+
+    // =========================================================================
     // Regression: low-stake provers must be slashed (not revert)
     // =========================================================================
 
@@ -3804,6 +3849,7 @@ contract MarketTest is Test {
         uint256 cs = market.currentStep();
         // lastChallengeStep = currentStep - 1 (challenge window is open)
         vm.store(address(market), bytes32(SLOT_LAST_CHALLENGE_STEP), bytes32(cs - 1));
+        vm.store(address(market), bytes32(SLOT_CHALLENGE_INITIALIZED), bytes32(uint256(1)));
         // currentChallengedOrders (slot 30): set length to 1, element[0] = orderId
         vm.store(address(market), bytes32(uint256(30)), bytes32(uint256(1)));
         vm.store(address(market), keccak256(abi.encode(uint256(30))), bytes32(orderId));
