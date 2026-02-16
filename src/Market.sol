@@ -975,6 +975,11 @@ contract FileMarket {
 
     /// @notice Trigger new heartbeat with challenge selection
     function _triggerNewHeartbeat() internal {
+        // Clean up expired orders before selecting challenges so stale orders
+        // are evicted from challengeableOrders regardless of the calling path
+        // (triggerHeartbeat, submitProof, or reportPrimaryFailure).
+        _cleanupExpiredOrders();
+
         uint256 currentStep_ = currentStep();
 
         // Reset proof tracking
@@ -1239,7 +1244,6 @@ contract FileMarket {
         // Process any pending slashes from the expired challenge before resetting state
         _processExpiredChallengeSlashes(msg.sender);
 
-        _cleanupExpiredOrders();
         _triggerNewHeartbeat();
     }
 

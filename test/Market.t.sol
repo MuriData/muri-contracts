@@ -3347,6 +3347,64 @@ contract MarketTest is Test {
         }
     }
 
+    /// @notice Expired orders must be cleaned up even when the heartbeat
+    /// transition is triggered by reportPrimaryFailure (not triggerHeartbeat).
+    function test_CleanupExpiredOrders_ViaReportPrimaryFailure() public {
+        // Two nodes so we can have a reporter
+        uint64 largeCapacity = TEST_CAPACITY * 4;
+        uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, largeStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+
+        vm.deal(node2, largeStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory meta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+
+        // Short-lived order (1 period) — will expire before the second heartbeat
+        uint256 shortCost = uint256(maxSize) * 1 * price;
+        vm.prank(user1);
+        uint256 expiringOrderId = market.placeOrder{value: shortCost}(meta, maxSize, 1, 1, price);
+        vm.prank(node1);
+        market.executeOrder(expiringOrderId);
+
+        // Long-lived order — stays active
+        uint256 longCost = uint256(maxSize) * 8 * price;
+        vm.prank(user1);
+        uint256 activeOrderId = market.placeOrder{value: longCost}(meta, maxSize, 8, 1, price);
+        vm.prank(node2);
+        market.executeOrder(activeOrderId);
+
+        assertEq(market.getActiveOrdersCount(), 2);
+
+        // First heartbeat (via triggerHeartbeat) — both orders still active
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+        assertEq(market.getActiveOrdersCount(), 2, "both orders still active");
+
+        // Warp past the short order's expiry AND past the challenge window
+        vm.warp(block.timestamp + PERIOD + (STEP * 3));
+        assertTrue(market.isOrderExpired(expiringOrderId), "short order should be expired");
+
+        // The primary prover fails → reportPrimaryFailure triggers _triggerNewHeartbeat
+        // which now includes _cleanupExpiredOrders.
+        vm.prank(node2);
+        market.reportPrimaryFailure();
+
+        // The expired order should have been cleaned up
+        assertEq(market.getActiveOrdersCount(), 1, "expired order cleaned up via reportPrimaryFailure path");
+
+        // Challenged orders must not reference the expired order
+        (,,,, uint256[] memory challengedOrders,,) = market.getCurrentChallengeInfo();
+        for (uint256 i = 0; i < challengedOrders.length; i++) {
+            assertTrue(challengedOrders[i] != expiringOrderId, "expired order must not be in challenge set");
+        }
+    }
+
     // =========================================================================
     // Regression: low-stake provers must be slashed (not revert)
     // =========================================================================
