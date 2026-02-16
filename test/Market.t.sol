@@ -1356,6 +1356,21 @@ contract MarketTest is Test {
         market.placeOrder{value: 1 ether}(fileMeta, 1024, 4, 0, 1e12);
     }
 
+    function test_PlaceOrder_RevertReplicasExceedMax() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        vm.prank(user1);
+        vm.expectRevert("invalid replicas");
+        market.placeOrder{value: 100 ether}(fileMeta, 1024, 4, 11, 1e12);
+    }
+
+    function test_PlaceOrder_MaxReplicasAccepted() public {
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint256 totalCost = uint256(1024) * 4 * 1e12 * 10;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, 1024, 4, 10, 1e12);
+        assertGt(orderId, 0, "order should be created at MAX_REPLICAS");
+    }
+
     function test_PlaceOrder_RevertInvalidPrice() public {
         FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         vm.prank(user1);

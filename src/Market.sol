@@ -10,6 +10,8 @@ contract FileMarket {
     uint256 constant STEP = 30 seconds; // proof submission period
     uint256 constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
     uint256 constant MAX_ORDERS_PER_NODE = 50; // cap orders per node to bound forced-exit iteration
+    uint8 constant MAX_REPLICAS = 10; // cap replicas per order to bound settlement loop gas
+    uint256 constant CLEANUP_BATCH_SIZE = 10; // expired orders processed per cleanup call
     uint256 constant CLEANUP_SCAN_CAP = 50; // max entries scanned per _cleanupExpiredOrders call
     uint256 immutable GENESIS_TS; // contract deploy timestamp
     address public owner;
@@ -187,7 +189,7 @@ contract FileMarket {
         require(_file.root > 0 && _file.root < SNARK_SCALAR_FIELD, "root not in Fr");
         require(_maxSize > 0, "invalid size");
         require(_periods > 0, "invalid periods");
-        require(_replicas > 0, "invalid replicas");
+        require(_replicas > 0 && _replicas <= MAX_REPLICAS, "invalid replicas");
         require(_pricePerBytePerPeriod > 0, "invalid price");
 
         uint256 totalCost = uint256(_maxSize) * uint256(_periods) * _pricePerBytePerPeriod * uint256(_replicas);
@@ -1216,7 +1218,6 @@ contract FileMarket {
             return;
         }
 
-        uint256 batchSize = 10;
         uint256 processed = 0;
         uint256 checked = 0;
         uint256 maxChecks = len < CLEANUP_SCAN_CAP ? len : CLEANUP_SCAN_CAP;
@@ -1224,7 +1225,7 @@ contract FileMarket {
         if (cleanupCursor >= len) cleanupCursor = 0;
         uint256 i = cleanupCursor;
 
-        while (checked < maxChecks && processed < batchSize) {
+        while (checked < maxChecks && processed < CLEANUP_BATCH_SIZE) {
             if (len == 0) break;
 
             uint256 activeOrderId = activeOrders[i];
