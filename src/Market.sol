@@ -1001,6 +1001,16 @@ contract FileMarket {
         uint256[] memory selectedOrders = _selectFromArray(challengeableOrders, currentRandomness, selectionCount);
 
         if (selectedOrders.length == 0) {
+            // Clear stale challenge state so _isOrderUnderActiveChallenge() doesn't
+            // match orders from a previous heartbeat.
+            delete currentChallengedOrders;
+            currentPrimaryProver = address(0);
+            // Secondary prover mappings already cleared by _resetProofTracking();
+            // zero out the array itself.
+            assembly {
+                sstore(currentSecondaryProvers.slot, 0)
+            }
+
             // Advance randomness even without challengeable orders to keep the beacon moving
             currentRandomness = uint256(
                 keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))

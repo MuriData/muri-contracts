@@ -4207,6 +4207,61 @@ contract MarketTest is Test {
             }
         }
     }
+
+    /// @notice Verify that a zero-selection heartbeat clears stale challenged-order state
+    ///         so _isOrderUnderActiveChallenge() no longer matches old orders.
+    function test_ZeroSelectionHeartbeat_ClearsStaleState() public {
+        // --- Setup: one node, one order, execute it ---
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // --- First heartbeat: order is in challengeableOrders, gets challenged ---
+        uint256 t1 = block.timestamp + STEP + 1;
+        vm.warp(t1);
+        market.triggerHeartbeat();
+
+        // Confirm the order is in currentChallengedOrders
+        (,,,, uint256[] memory challenged1,,) = market.getCurrentChallengeInfo();
+        bool found = false;
+        for (uint256 i = 0; i < challenged1.length; i++) {
+            if (challenged1[i] == orderId) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, "order should be challenged after first heartbeat");
+
+        // --- Expire + complete the order so challengeableOrders becomes empty ---
+        uint256 t2 = t1 + PERIOD * periods + STEP + 1;
+        vm.warp(t2);
+        market.completeExpiredOrder(orderId);
+
+        // Confirm challengeableOrders is now empty
+        assertEq(market.getChallengeableOrdersCount(), 0, "challengeableOrders should be empty");
+
+        // --- Second heartbeat: zero selection branch ---
+        uint256 t3 = t2 + STEP + 1;
+        vm.warp(t3);
+        market.triggerHeartbeat();
+
+        // Verify stale state was cleared
+        (,, address primaryAfter, address[] memory secAfter, uint256[] memory challengedAfter,,) =
+            market.getCurrentChallengeInfo();
+        assertEq(challengedAfter.length, 0, "currentChallengedOrders should be empty after zero-selection heartbeat");
+        assertEq(primaryAfter, address(0), "currentPrimaryProver should be cleared");
+        assertEq(secAfter.length, 0, "currentSecondaryProvers should be cleared");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
