@@ -4277,6 +4277,56 @@ contract MarketTest is Test {
         assertEq(primaryAfter, address(0), "currentPrimaryProver should be cleared");
         assertEq(secAfter.length, 0, "currentSecondaryProvers should be cleared");
     }
+
+    /// @notice When more orders expire than CLEANUP_BATCH_SIZE can handle,
+    ///         leftover expired orders must NOT be selected for challenges.
+    function test_ExpiredOrdersFilteredFromChallengeSelection() public {
+        // Use a large-capacity node so it can execute many orders
+        uint64 bigCap = TEST_CAPACITY * 20;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0x1234, 0x5678);
+
+        // Place and execute 12 short-lived orders (> CLEANUP_BATCH_SIZE of 10)
+        uint64 maxSize = 256;
+        uint16 periods = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        uint256[] memory orderIds = new uint256[](12);
+
+        for (uint256 j = 0; j < 12; j++) {
+            vm.prank(user1);
+            orderIds[j] = market.placeOrder{value: totalCost}(
+                FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI}), maxSize, periods, 1, price
+            );
+            vm.prank(node1);
+            market.executeOrder(orderIds[j]);
+        }
+
+        // All 12 should be challengeable
+        assertEq(market.getChallengeableOrdersCount(), 12);
+
+        // Expire all orders
+        uint256 t1 = block.timestamp + PERIOD * periods + STEP + 1;
+        vm.warp(t1);
+
+        // Trigger heartbeat — cleanup processes at most 10, but the filter
+        // must catch the remaining expired orders during selection.
+        market.triggerHeartbeat();
+
+        // Verify NO expired order was challenged
+        (,,,, uint256[] memory challenged,,) = market.getCurrentChallengeInfo();
+        for (uint256 k = 0; k < challenged.length; k++) {
+            assertFalse(market.isOrderExpired(challenged[k]), "expired order should not be challenged");
+        }
+
+        // The expired orders that were caught by the filter should have been
+        // evicted from challengeableOrders too.
+        uint256 remaining = market.getChallengeableOrdersCount();
+        // All orders expired, so after cleanup + filter eviction, none should remain
+        assertEq(remaining, 0, "all expired orders should be evicted from challengeableOrders");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

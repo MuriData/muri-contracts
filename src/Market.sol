@@ -1002,6 +1002,21 @@ contract FileMarket {
         // Select random orders for challenge from challengeable orders only (orders with assigned nodes)
         uint256[] memory selectedOrders = _selectFromArray(challengeableOrders, currentRandomness, selectionCount);
 
+        // Filter out any expired orders that slipped past the capped cleanup pass,
+        // evicting them from challengeableOrders so future heartbeats won't re-select them.
+        uint256 validCount = 0;
+        for (uint256 i = 0; i < selectedOrders.length; i++) {
+            if (!isOrderExpired(selectedOrders[i])) {
+                selectedOrders[validCount] = selectedOrders[i];
+                validCount++;
+            } else {
+                _removeFromChallengeableOrders(selectedOrders[i]);
+            }
+        }
+        assembly {
+            mstore(selectedOrders, validCount)
+        }
+
         if (selectedOrders.length == 0) {
             // Clear stale challenge state so _isOrderUnderActiveChallenge() doesn't
             // match orders from a previous heartbeat.
