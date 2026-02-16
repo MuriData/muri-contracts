@@ -122,8 +122,14 @@ contract NodeStaking {
 
         emit NodeCapacityDecreased(msg.sender, stakeToRelease, info.capacity);
 
-        // If capacity reached zero, remove from nodeList to prevent stale/duplicate entries
+        // If capacity reached zero, refund any residual stake dust and remove node
         if (info.capacity == 0) {
+            uint256 residual = info.stake;
+            if (residual > 0) {
+                info.stake = 0;
+                (bool ok,) = msg.sender.call{value: residual}("");
+                require(ok, "dust refund failed");
+            }
             uint256 idx = nodeIndexInList[msg.sender];
             uint256 lastIdx = nodeList.length - 1;
             if (idx != lastIdx) {

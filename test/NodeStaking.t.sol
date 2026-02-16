@@ -842,6 +842,40 @@ contract NodeStakingTest is Test {
         assertEq(totalCapStaked, cap, "capacity matches single node");
     }
 
+    function test_DecreaseCapacity_ToZero_RefundsDust() public {
+        // Stake node with 1000 bytes
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        // Slash an amount that leaves sub-byte dust.
+        // Slash 1.5 bytes worth → stake becomes 998.5 * STAKE_PER_BYTE
+        // capacity floors to 998, dust = 0.5 * STAKE_PER_BYTE
+        uint256 slashAmount = STAKE_PER_BYTE + STAKE_PER_BYTE / 2; // 1.5 * STAKE_PER_BYTE
+        nodeStaking.slashNode(node1, slashAmount);
+
+        (uint256 stakeAfterSlash, uint64 capAfterSlash, uint64 usedAfterSlash,,) = nodeStaking.getNodeInfo(node1);
+        uint256 expectedDust = stakeAfterSlash - uint256(capAfterSlash) * STAKE_PER_BYTE;
+        assertTrue(expectedDust > 0, "precondition: dust must exist");
+        assertEq(usedAfterSlash, 0);
+
+        // Decrease all remaining capacity to zero
+        uint256 node1BalBefore = node1.balance;
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(capAfterSlash);
+
+        // Node should receive capacity*STAKE_PER_BYTE + dust
+        uint256 node1BalAfter = node1.balance;
+        uint256 expectedRefund = uint256(capAfterSlash) * STAKE_PER_BYTE + expectedDust;
+        assertEq(node1BalAfter - node1BalBefore, expectedRefund, "node must receive full refund including dust");
+
+        // Node state must be fully cleaned up
+        (uint256 s, uint64 c,,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(s, 0, "stake cleared");
+        assertEq(c, 0, "capacity cleared");
+    }
+
     // Allow test contract (acting as market) to receive ETH from slashNode
     receive() external payable {}
 
