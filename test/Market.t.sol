@@ -2207,18 +2207,21 @@ contract MarketTest is Test {
 
         _setupZKChallenge(node1, orderId);
 
-        // Submit valid proof — the pairing check passes on-chain
-        // Primary proof triggers _triggerNewHeartbeat() which resets proofSubmitted & primaryProofReceived
+        uint256 challengeStepBefore = market.lastChallengeStep();
+
+        // Submit valid proof — the pairing check passes on-chain.
+        // Primary proof no longer immediately rolls to a new heartbeat; the round
+        // stays active so secondary provers can still be slashed at expiry.
         vm.prank(node1);
         market.submitProof(_zkProof(), ZK_COMMITMENT);
 
-        // After primary proof, _triggerNewHeartbeat was called which:
-        // 1. Reset primaryProofReceived to false
-        // 2. Reset proofSubmitted[node1] to false
-        // 3. Advanced lastChallengeStep
-        // The ProofSubmitted event was emitted (verified in trace)
-        // Verify the heartbeat was triggered (lastChallengeStep was updated)
-        assertEq(market.lastChallengeStep(), market.currentStep(), "heartbeat advanced challenge step");
+        // Round state preserved: lastChallengeStep unchanged, primaryProofReceived set,
+        // commitment deferred as pendingRandomness for the next heartbeat.
+        assertEq(market.lastChallengeStep(), challengeStepBefore, "challenge step should not advance on primary proof");
+        assertTrue(market.primaryProofReceived(), "primary proof should be recorded");
+        assertEq(
+            market.pendingRandomness(), uint256(ZK_COMMITMENT), "commitment should be stored as pending randomness"
+        );
     }
 
     function test_SubmitProof_RevertInvalidProof() public {
@@ -4326,6 +4329,67 @@ contract MarketTest is Test {
         uint256 remaining = market.getChallengeableOrdersCount();
         // All orders expired, so after cleanup + filter eviction, none should remain
         assertEq(remaining, 0, "all expired orders should be evicted from challengeableOrders");
+    }
+
+    /// @notice Secondary provers must still be slashed even when the primary proves quickly.
+    ///         Before the fix, primary proof immediately rolled to a new heartbeat, wiping
+    ///         secondaries' proof obligations so they escaped slashing.
+    function test_SecondarySlashedAfterPrimaryProvesQuickly() public {
+        // --- Stake two ZK-capable nodes ---
+        _stakeZKNode(node1);
+        _stakeZKNode(node2);
+
+        uint256 orderId = _placeZKOrder();
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Place a second order for node2 to execute (for secondary assignment)
+        FileMarket.FileMeta memory fileMeta2 = FileMarket.FileMeta({root: ZK_FILE_ROOT, uri: "QmZKTestFile2"});
+        uint256 totalCost2 = uint256(256) * 4 * 1e12;
+        vm.prank(user1);
+        uint256 orderId2 = market.placeOrder{value: totalCost2}(fileMeta2, 256, 4, 1, 1e12);
+        vm.prank(node2);
+        market.executeOrder(orderId2);
+
+        // Advance time so currentStep > 0
+        uint256 t0 = block.timestamp + STEP + 1;
+        vm.warp(t0);
+
+        // --- Set up challenge: node1 = primary for orderId, node2 = secondary for orderId2 ---
+        _setupZKChallenge(node1, orderId);
+
+        // Add node2 as secondary prover
+        vm.store(address(market), bytes32(uint256(29)), bytes32(uint256(1))); // length = 1
+        bytes32 secArrayStart = keccak256(abi.encode(uint256(29)));
+        vm.store(address(market), secArrayStart, bytes32(uint256(uint160(node2))));
+        bytes32 node2MapSlot = keccak256(abi.encode(node2, SLOT_NODE_TO_PROVE_ORDER_ID));
+        vm.store(address(market), node2MapSlot, bytes32(orderId2));
+
+        // Record node2's stake before slashing
+        (uint256 node2StakeBefore,,,,) = nodeStaking.getNodeInfo(node2);
+
+        // --- Primary proves immediately (within the step) ---
+        vm.prank(node1);
+        market.submitProof(_zkProof(), ZK_COMMITMENT);
+
+        // node2 does NOT submit proof — secondary fails their obligation.
+        // Round should stay active (no immediate roll).
+        assertTrue(market.primaryProofReceived(), "primary proof should be recorded");
+
+        // --- Advance past step expiry ---
+        uint256 t1 = t0 + STEP + 1;
+        vm.warp(t1);
+
+        // triggerHeartbeat processes expired challenge slashes before rolling
+        market.triggerHeartbeat();
+
+        // --- Verify node2 was slashed ---
+        (uint256 node2StakeAfter,,,,) = nodeStaking.getNodeInfo(node2);
+        assertTrue(node2StakeAfter < node2StakeBefore, "secondary should have been slashed");
+
+        // Verify pending randomness was applied (commitment from primary proof)
+        assertEq(market.pendingRandomness(), 0, "pending randomness should be consumed");
     }
 }
 

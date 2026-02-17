@@ -154,6 +154,9 @@ contract FileMarket {
     // Challenge initialization flag (placed at end to preserve storage layout)
     bool public challengeInitialized; // true after the first heartbeat has been issued
 
+    // Deferred randomness from primary proof submission (applied at next heartbeat start)
+    uint256 public pendingRandomness;
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -890,9 +893,10 @@ contract FileMarket {
 
         if (isPrimary) {
             primaryProofReceived = true;
-            // Primary prover's commitment becomes next randomness
-            currentRandomness = uint256(_commitment);
-            _triggerNewHeartbeat();
+            // Defer commitment as next round's randomness seed so that
+            // currentRandomness stays valid for secondary proof verification
+            // during the remainder of this step.
+            pendingRandomness = uint256(_commitment);
         }
 
         emit ProofSubmitted(msg.sender, isPrimary, _commitment);
@@ -982,8 +986,14 @@ contract FileMarket {
     function _triggerNewHeartbeat() internal {
         // Clean up expired orders before selecting challenges so stale orders
         // are evicted from challengeableOrders regardless of the calling path
-        // (triggerHeartbeat, submitProof, or reportPrimaryFailure).
+        // (triggerHeartbeat or reportPrimaryFailure).
         _cleanupExpiredOrders();
+
+        // Apply deferred randomness from primary proof if available
+        if (pendingRandomness != 0) {
+            currentRandomness = pendingRandomness;
+            pendingRandomness = 0;
+        }
 
         uint256 currentStep_ = currentStep();
         challengeInitialized = true;
