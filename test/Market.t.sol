@@ -4464,6 +4464,70 @@ contract MarketTest is Test {
         // (deterministic / no shuffle) is 100%.  With shuffle, P(all 20 are order1) = (1/5)^20 ≈ 0.
         assertTrue(firstIsOrder1 < trials, "first element should not always be order 1 (selection not shuffled)");
     }
+
+    /// @notice A node joining 1 second before a period boundary should NOT earn for
+    ///         that partial period.  Only complete periods count.
+    function test_BoundarySniping_NoPartialPeriodReward() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // Place a 2-period order at period 0
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        // Warp to 1 second before period 1 boundary and have node1 execute
+        uint256 period1Start = 1 + PERIOD;
+        vm.warp(period1Start - 1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // The node joined in period 0 but only 1 second before period 1.
+        // With ceiling division, effective start period = ceil((period1Start-1-GENESIS_TS)/PERIOD) = 1.
+        // So node should earn for (settlePeriod - 1) periods, NOT (settlePeriod - 0).
+
+        // Warp past expiry: order was placed at period 0, lasts 2 periods, ends at period 2
+        vm.warp(1 + PERIOD * 3 + 1);
+        market.completeExpiredOrder(orderId);
+
+        // Expected reward: 1 complete period (period 1 only) × maxSize × price
+        // Period 0 was partial (1 second) so no payout. Period 2 is past order end.
+        uint256 expectedReward = uint256(maxSize) * price * 1;
+        uint256 claimable = market.getClaimableRewards(node1);
+        assertEq(claimable, expectedReward, "should only earn for 1 complete period, not 2");
+    }
+
+    /// @notice A node joining at the exact period boundary earns for that full period.
+    function test_ExactBoundaryJoin_EarnsFullPeriod() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        // Warp to exactly period 0 start (GENESIS_TS) — join at boundary
+        vm.warp(1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // With ceiling division, elapsed=0, ceil(0/PERIOD)=0 → earns from period 0
+        vm.warp(1 + PERIOD * 3 + 1);
+        market.completeExpiredOrder(orderId);
+
+        // Should earn for both full periods (0 and 1)
+        uint256 expectedReward = uint256(maxSize) * price * 2;
+        uint256 claimable = market.getClaimableRewards(node1);
+        assertEq(claimable, expectedReward, "should earn for both complete periods");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

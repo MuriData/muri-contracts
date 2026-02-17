@@ -109,7 +109,7 @@ contract FileMarket {
     mapping(address => uint256) public nodeEarnings; // total earnings accumulated
     mapping(address => uint256) public nodeWithdrawn; // total amount withdrawn
     mapping(address => uint256) public nodeLastClaimPeriod; // last period when rewards were claimed
-    mapping(address => mapping(uint256 => uint256)) public nodeOrderStartPeriod; // node -> orderId -> period when started storing
+    mapping(address => mapping(uint256 => uint256)) public nodeOrderStartTimestamp; // node -> orderId -> block.timestamp when assigned
 
     // Escrow tracking for proper payment distribution
     mapping(uint256 => uint256) public orderEscrowWithdrawn; // orderId -> amount already paid to nodes
@@ -255,8 +255,8 @@ contract FileMarket {
             _addToChallengeableOrders(_orderId);
         }
 
-        // Record when this node started storing this order
-        nodeOrderStartPeriod[msg.sender][_orderId] = currentPeriod();
+        // Record when this node started storing this order (timestamp, not period)
+        nodeOrderStartTimestamp[msg.sender][_orderId] = block.timestamp;
 
         // Update node's used capacity
         (,, uint64 used,,) = nodeStaking.getNodeInfo(msg.sender);
@@ -655,7 +655,7 @@ contract FileMarket {
                 if (settledReward > 0) {
                     nodePendingRewards[_node] += settledReward;
                 }
-                delete nodeOrderStartPeriod[_node][_orderId];
+                delete nodeOrderStartTimestamp[_node][_orderId];
 
                 if (j != assignedNodes.length - 1) {
                     assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
@@ -689,7 +689,7 @@ contract FileMarket {
         if (settledReward > 0) {
             nodePendingRewards[_node] += settledReward;
         }
-        delete nodeOrderStartPeriod[_node][_orderId];
+        delete nodeOrderStartTimestamp[_node][_orderId];
 
         // Remove node from order assignments
         if (_nodeIndex != assignedNodes.length - 1) {
@@ -742,7 +742,7 @@ contract FileMarket {
                 nodePendingRewards[node] += settledReward;
                 totalSettled += settledReward;
             }
-            delete nodeOrderStartPeriod[node][_orderId];
+            delete nodeOrderStartTimestamp[node][_orderId];
 
             (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
             nodeStaking.updateNodeUsed(node, used - order.maxSize);
@@ -821,7 +821,12 @@ contract FileMarket {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return 0;
 
-        uint256 nodeStartPeriod = nodeOrderStartPeriod[_node][_orderId];
+        // Derive effective start period via ceiling division so nodes only earn
+        // for periods they were assigned for the ENTIRE duration, preventing
+        // boundary-sniping (joining 1 second before a period flip for a full payout).
+        uint256 startTs = nodeOrderStartTimestamp[_node][_orderId];
+        uint256 elapsed = startTs - GENESIS_TS;
+        uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
 
         uint256 orderEndPeriod = order.startPeriod + order.periods;
         uint256 storageEndPeriod = _settlePeriod > orderEndPeriod ? orderEndPeriod : _settlePeriod;
