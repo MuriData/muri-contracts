@@ -368,54 +368,50 @@ contract FileMarket {
         uint256 actualCount = _count > total ? total : _count;
         selectedOrders = new uint256[](actualCount);
 
-        if (actualCount == total) {
-            for (uint256 i = 0; i < total; i++) {
-                selectedOrders[i] = arr[i];
+        // Always shuffle via virtual Fisher-Yates so the output ordering is
+        // randomised even when actualCount == total.  This prevents primary
+        // prover selection from being biased toward whichever order sits at
+        // index 0 of the storage array.
+        uint256[] memory mapKeys = new uint256[](actualCount);
+        uint256[] memory mapVals = new uint256[](actualCount);
+        uint256 mapLen = 0;
+
+        for (uint256 i = 0; i < actualCount; i++) {
+            uint256 j = (uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i)) + i;
+
+            // Lookup mapped value for j (unmapped positions map to themselves)
+            uint256 valJ = j;
+            for (uint256 k = 0; k < mapLen; k++) {
+                if (mapKeys[k] == j) {
+                    valJ = mapVals[k];
+                    break;
+                }
             }
-        } else {
-            // Virtual Fisher-Yates: track only the K swapped positions in a sparse map
-            // instead of allocating an N-sized indices array.
-            uint256[] memory mapKeys = new uint256[](actualCount);
-            uint256[] memory mapVals = new uint256[](actualCount);
-            uint256 mapLen = 0;
 
-            for (uint256 i = 0; i < actualCount; i++) {
-                uint256 j = (uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i)) + i;
-
-                // Lookup mapped value for j (unmapped positions map to themselves)
-                uint256 valJ = j;
-                for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == j) {
-                        valJ = mapVals[k];
-                        break;
-                    }
+            // Lookup mapped value for i
+            uint256 valI = i;
+            for (uint256 k = 0; k < mapLen; k++) {
+                if (mapKeys[k] == i) {
+                    valI = mapVals[k];
+                    break;
                 }
+            }
 
-                // Lookup mapped value for i
-                uint256 valI = i;
-                for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == i) {
-                        valI = mapVals[k];
-                        break;
-                    }
-                }
+            selectedOrders[i] = arr[valJ];
 
-                selectedOrders[i] = arr[valJ];
-
-                // Record swap: map[j] = valI
-                bool found = false;
-                for (uint256 k = 0; k < mapLen; k++) {
-                    if (mapKeys[k] == j) {
-                        mapVals[k] = valI;
-                        found = true;
-                        break;
-                    }
+            // Record swap: map[j] = valI
+            bool found = false;
+            for (uint256 k = 0; k < mapLen; k++) {
+                if (mapKeys[k] == j) {
+                    mapVals[k] = valI;
+                    found = true;
+                    break;
                 }
-                if (!found) {
-                    mapKeys[mapLen] = j;
-                    mapVals[mapLen] = valI;
-                    mapLen++;
-                }
+            }
+            if (!found) {
+                mapKeys[mapLen] = j;
+                mapVals[mapLen] = valI;
+                mapLen++;
             }
         }
     }

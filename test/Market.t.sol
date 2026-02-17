@@ -4432,6 +4432,38 @@ contract MarketTest is Test {
         vm.prank(node1);
         nodeStaking.decreaseCapacity(freeCapacity); // should succeed now
     }
+
+    /// @notice selectRandomOrders must shuffle even when count >= array length
+    ///         (the "select all" path).  Before the fix, elements were returned
+    ///         in deterministic storage order, biasing primary prover selection.
+    function test_SelectAll_IsShuffled() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // Place 5 orders so there are exactly 5 active orders
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint256 price = 1e12;
+        for (uint256 i = 0; i < 5; i++) {
+            uint256 cost = uint256(256) * 2 * price;
+            vm.prank(user1);
+            market.placeOrder{value: cost}(fileMeta, 256, 2, 1, price);
+        }
+
+        // Select all 5 with count = 5 (triggers the "select all" path)
+        // Run many seeds and check that the first element is NOT always orderID 1
+        uint256 firstIsOrder1 = 0;
+        uint256 trials = 20;
+        for (uint256 seed = 1; seed <= trials; seed++) {
+            uint256[] memory selected = market.selectRandomOrders(seed, 5);
+            assertEq(selected.length, 5, "should return all 5");
+            if (selected[0] == 1) {
+                firstIsOrder1++;
+            }
+        }
+
+        // With 5 orders, probability of index-0 being order 1 in all 20 trials
+        // (deterministic / no shuffle) is 100%.  With shuffle, P(all 20 are order1) = (1/5)^20 ≈ 0.
+        assertTrue(firstIsOrder1 < trials, "first element should not always be order 1 (selection not shuffled)");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
