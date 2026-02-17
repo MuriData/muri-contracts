@@ -656,6 +656,7 @@ contract FileMarket {
                     nodePendingRewards[_node] += settledReward;
                 }
                 delete nodeOrderStartTimestamp[_node][_orderId];
+                delete nodeOrderEarnings[_orderId][_node];
 
                 if (j != assignedNodes.length - 1) {
                     assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
@@ -690,6 +691,7 @@ contract FileMarket {
             nodePendingRewards[_node] += settledReward;
         }
         delete nodeOrderStartTimestamp[_node][_orderId];
+        delete nodeOrderEarnings[_orderId][_node];
 
         // Remove node from order assignments
         if (_nodeIndex != assignedNodes.length - 1) {
@@ -743,6 +745,7 @@ contract FileMarket {
                 totalSettled += settledReward;
             }
             delete nodeOrderStartTimestamp[node][_orderId];
+            delete nodeOrderEarnings[_orderId][node];
 
             (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
             nodeStaking.updateNodeUsed(node, used - order.maxSize);

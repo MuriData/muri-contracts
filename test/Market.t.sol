@@ -4565,6 +4565,57 @@ contract MarketTest is Test {
         vm.prank(node2);
         market.reportPrimaryFailure();
     }
+
+    /// @notice A node that quits and re-joins the same order should earn full
+    ///         rewards for the second assignment, not be penalised by stale
+    ///         nodeOrderEarnings from the first assignment.
+    function test_RejoinSameOrder_FullRewardsOnSecondAssignment() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // Place a 4-period order
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        // --- First assignment: join at period 0 boundary, serve 1 full period, then quit ---
+        vm.warp(1); // GENESIS_TS = 1, so this is period 0 boundary
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 full period (into period 1)
+        vm.warp(1 + PERIOD);
+        // Quit order — settles reward for 1 period, then clears earnings
+        vm.prank(node1);
+        market.quitOrder(orderId);
+
+        uint256 rewardAfterFirstAssignment = market.getClaimableRewards(node1);
+        // First assignment: 1 period served → maxSize * price * 1
+        uint256 expectedFirst = uint256(maxSize) * price * 1;
+        assertEq(rewardAfterFirstAssignment, expectedFirst, "first assignment reward");
+
+        // --- Second assignment: re-join the same order, serve 1 full period ---
+        vm.warp(1 + PERIOD); // still period 1 boundary
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 full period (into period 2)
+        vm.warp(1 + PERIOD * 2);
+        vm.prank(node1);
+        market.quitOrder(orderId);
+
+        uint256 rewardAfterSecondAssignment = market.getClaimableRewards(node1);
+        // Second assignment: 1 additional period served → another maxSize * price * 1
+        uint256 expectedTotal = expectedFirst + uint256(maxSize) * price * 1;
+        assertEq(
+            rewardAfterSecondAssignment,
+            expectedTotal,
+            "second assignment should earn full reward, not be reduced by first"
+        );
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
