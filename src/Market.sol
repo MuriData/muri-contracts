@@ -919,21 +919,27 @@ contract FileMarket {
         // Mark failure as reported to prevent duplicate reports
         primaryFailureReported = true;
 
-        // Slash primary prover severely
+        // Slash primary prover severely (skip if already invalidated by authority slash)
         address primaryProver = currentPrimaryProver;
         require(nodeToProveOrderId[primaryProver] != 0, "primary not assigned to order");
-        uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
 
-        // Cap to available stake to prevent revert
-        (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
-        if (severeSlashAmount > nodeStake) {
-            severeSlashAmount = nodeStake;
-        }
+        if (nodeStaking.isValidNode(primaryProver)) {
+            uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
 
-        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
-        _distributeSlashFunds(msg.sender, primaryProver, totalSlashed);
-        if (forcedExit) {
-            _handleForcedOrderExits(primaryProver);
+            // Cap to available stake to prevent revert
+            (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
+            if (severeSlashAmount > nodeStake) {
+                severeSlashAmount = nodeStake;
+            }
+
+            if (severeSlashAmount > 0) {
+                (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
+                _distributeSlashFunds(msg.sender, primaryProver, totalSlashed);
+                if (forcedExit) {
+                    _handleForcedOrderExits(primaryProver);
+                }
+                emit NodeSlashed(primaryProver, severeSlashAmount, "failed primary proof");
+            }
         }
 
         // Generate fallback randomness using reporter's signature and block data

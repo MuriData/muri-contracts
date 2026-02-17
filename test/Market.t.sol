@@ -4528,6 +4528,43 @@ contract MarketTest is Test {
         uint256 claimable = market.getClaimableRewards(node1);
         assertEq(claimable, expectedReward, "should earn for both complete periods");
     }
+
+    /// @notice reportPrimaryFailure must not revert when the primary was already
+    ///         invalidated by an authority slash before the challenge expired.
+    function test_ReportPrimaryFailure_AfterAuthoritySlash() public {
+        // Two nodes: node1 is primary, node2 is the reporter
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0x5678, 0x1234);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint256 totalCost = uint256(256) * 4 * 1e12;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, 256, 4, 1, 1e12);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Set up challenge with node1 as primary
+        uint256 t0 = block.timestamp + STEP + 1;
+        vm.warp(t0);
+        _setupZKChallenge(node1, orderId);
+
+        // Authority slash invalidates node1 completely (slash all stake)
+        (uint256 fullStake,,,,) = nodeStaking.getNodeInfo(node1);
+        market.slashNode(node1, fullStake, "authority penalty");
+
+        // node1 is no longer valid
+        assertFalse(nodeStaking.isValidNode(node1), "node1 should be invalidated");
+
+        // Advance past challenge expiry
+        uint256 t1 = t0 + STEP + 1;
+        vm.warp(t1);
+
+        // reportPrimaryFailure should succeed (not revert) even though primary is invalid.
+        // It also triggers a new heartbeat internally, which resets primaryFailureReported,
+        // so we just verify the call completes without reverting.
+        vm.prank(node2);
+        market.reportPrimaryFailure();
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards
