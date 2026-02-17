@@ -4616,6 +4616,161 @@ contract MarketTest is Test {
             "second assignment should earn full reward, not be reduced by first"
         );
     }
+
+    // ===== FIX 16: O(1) STATS AGGREGATES =====
+
+    function test_StatsAggregates_PlaceAndComplete() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * periods * price;
+
+        // Place order — aggregate should increase
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        assertEq(market.aggregateActiveEscrow(), totalCost, "escrow after place");
+        assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn after place");
+
+        // Check getGlobalStats returns same value
+        (,, uint256 escrowLocked,,,,,,,,) = market.getGlobalStats();
+        assertEq(escrowLocked, totalCost, "getGlobalStats escrow");
+
+        // Execute and advance past expiry
+        vm.prank(node1);
+        market.executeOrder(orderId);
+        vm.warp(block.timestamp + uint256(periods) * 7 days + 1);
+
+        // Complete — aggregates should drop
+        market.completeExpiredOrder(orderId);
+        assertEq(market.aggregateActiveEscrow(), 0, "escrow after complete");
+        assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn after complete");
+    }
+
+    function test_StatsAggregates_MultipleOrders() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 100;
+        uint16 periods = 1;
+        uint256 price = 1e12;
+        uint256 cost1 = uint256(maxSize) * periods * price;
+
+        // Place two orders
+        vm.prank(user1);
+        market.placeOrder{value: cost1}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(user1);
+        market.placeOrder{value: cost1}(fileMeta, maxSize, periods, 1, price);
+
+        assertEq(market.aggregateActiveEscrow(), cost1 * 2, "two orders escrow");
+
+        // Financial stats should match
+        (, uint256 escrowHeld, uint256 rewardsPaid, uint256 avgVal,) = market.getFinancialStats();
+        assertEq(escrowHeld, cost1 * 2, "financial escrow held");
+        assertEq(rewardsPaid, 0, "no rewards paid");
+        assertEq(avgVal, cost1, "average = total / 2");
+    }
+
+    function test_StatsAggregates_CancelReducesAggregates() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * periods * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 period, then cancel
+        vm.warp(block.timestamp + 7 days);
+
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // After cancel, aggregates should be zero (only order was cancelled)
+        assertEq(market.aggregateActiveEscrow(), 0, "escrow zero after cancel");
+        assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn zero after cancel");
+
+        // Global stats should reflect zero
+        (,, uint256 escrowLocked,,,,,,,,) = market.getGlobalStats();
+        assertEq(escrowLocked, 0, "global stats escrow zero");
+    }
+
+    function test_StatsAggregates_WithdrawnTracksRewards() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 2;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * periods * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 period and claim rewards
+        vm.warp(block.timestamp + 7 days);
+        vm.prank(node1);
+        market.claimRewards();
+
+        uint256 expectedReward = uint256(maxSize) * price * 1; // 1 period
+        assertEq(market.aggregateActiveWithdrawn(), expectedReward, "withdrawn after claim");
+        assertEq(market.aggregateActiveEscrow(), totalCost, "escrow unchanged after claim");
+
+        // Financial stats should show the split
+        (, uint256 escrowHeld, uint256 rewardsPaid,,) = market.getFinancialStats();
+        assertEq(rewardsPaid, expectedReward, "rewards paid = withdrawn");
+        assertEq(escrowHeld, totalCost - expectedReward, "escrow held = total - rewards");
+    }
+
+    function test_NodeStaking_GlobalAggregates() public {
+        NodeStaking ns = market.nodeStaking();
+
+        // Initially zero
+        (uint256 nodes0, uint256 cap0, uint256 used0) = ns.getNetworkStats();
+        assertEq(nodes0, 0);
+        assertEq(cap0, 0);
+        assertEq(used0, 0);
+
+        // Stake node1
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        (uint256 nodes1, uint256 cap1, uint256 used1) = ns.getNetworkStats();
+        assertEq(nodes1, 1);
+        assertEq(cap1, TEST_CAPACITY);
+        assertEq(used1, 0);
+
+        // Execute an order to increase used
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 totalCost = uint256(maxSize) * 2 * 1e12;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, 2, 1, 1e12);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        (, uint256 cap2, uint256 used2) = ns.getNetworkStats();
+        assertEq(cap2, TEST_CAPACITY, "capacity unchanged by execute");
+        assertEq(used2, maxSize, "used increased by maxSize");
+
+        // Unstake after completing order
+        vm.warp(block.timestamp + 14 days + 1);
+        market.completeExpiredOrder(orderId);
+
+        vm.prank(node1);
+        ns.unstakeNode();
+
+        (uint256 nodes3, uint256 cap3, uint256 used3) = ns.getNetworkStats();
+        assertEq(nodes3, 0, "no nodes after unstake");
+        assertEq(cap3, 0, "zero capacity after unstake");
+        assertEq(used3, 0, "zero used after unstake");
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

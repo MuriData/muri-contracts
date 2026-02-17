@@ -1037,6 +1037,107 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.unstakeNode();
     }
+
+    // ===== FIX 16: INCREMENTAL AGGREGATE TESTS =====
+
+    function test_GlobalAggregates_StakeIncreaseDecrease() public {
+        uint64 cap1 = 1000;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake1}(cap1, 0x1234, 0x5678);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 1000, "capacity after stake");
+        assertEq(nodeStaking.globalTotalUsed(), 0, "used after stake");
+
+        // Increase capacity
+        uint64 addCap = 500;
+        uint256 addStake = uint256(addCap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.increaseCapacity{value: addStake}(addCap);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 1500, "capacity after increase");
+
+        // Decrease capacity
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(200);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 1300, "capacity after decrease");
+    }
+
+    function test_GlobalAggregates_UsedTracking() public {
+        uint64 cap = 1000;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        // Update used (this contract is the market)
+        nodeStaking.updateNodeUsed(node1, 400);
+        assertEq(nodeStaking.globalTotalUsed(), 400, "used after update");
+
+        // Decrease used
+        nodeStaking.updateNodeUsed(node1, 200);
+        assertEq(nodeStaking.globalTotalUsed(), 200, "used after decrease");
+
+        // Force reduce used
+        nodeStaking.forceReduceUsed(node1, 50);
+        assertEq(nodeStaking.globalTotalUsed(), 50, "used after forceReduce");
+    }
+
+    function test_GlobalAggregates_SlashReducesCapacity() public {
+        uint64 cap = 10;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        nodeStaking.updateNodeUsed(node1, 3);
+
+        // Slash 2 bytes worth of stake (no forced exit since newCap=8 > used=3)
+        uint256 slashAmt = 2 * STAKE_PER_BYTE;
+        nodeStaking.slashNode(node1, slashAmt);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 8, "capacity after slash");
+        assertEq(nodeStaking.globalTotalUsed(), 3, "used unchanged after non-forced slash");
+    }
+
+    function test_GlobalAggregates_SlashToZeroRemovesAll() public {
+        uint64 cap = 2;
+        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(cap, 0x1234, 0x5678);
+
+        // Slash enough to bring capacity to zero
+        uint256 slashAmt = STAKE_PER_BYTE + 1;
+        nodeStaking.slashNode(node1, slashAmt);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 0, "capacity zero after full slash");
+        assertEq(nodeStaking.globalTotalUsed(), 0, "used zero after full slash");
+    }
+
+    function test_GlobalAggregates_MultipleNodes() public {
+        uint64 cap1 = 1000;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake1}(cap1, 0x1111, 0x2222);
+
+        uint64 cap2 = 2000;
+        uint256 stake2 = uint256(cap2) * STAKE_PER_BYTE;
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: stake2}(cap2, 0x3333, 0x4444);
+
+        assertEq(nodeStaking.globalTotalCapacity(), 3000, "combined capacity");
+
+        nodeStaking.updateNodeUsed(node1, 300);
+        nodeStaking.updateNodeUsed(node2, 500);
+        assertEq(nodeStaking.globalTotalUsed(), 800, "combined used");
+
+        // Unstake node1 (need to release used first)
+        nodeStaking.updateNodeUsed(node1, 0);
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
+
+        assertEq(nodeStaking.globalTotalCapacity(), 2000, "capacity after node1 unstake");
+        assertEq(nodeStaking.globalTotalUsed(), 500, "used after node1 unstake");
+    }
 }
 
 // Malicious contract for testing reentrancy protection

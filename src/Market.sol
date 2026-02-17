@@ -157,6 +157,10 @@ contract FileMarket {
     // Deferred randomness from primary proof submission (applied at next heartbeat start)
     uint256 public pendingRandomness;
 
+    // Incremental escrow aggregates for O(1) stats (placed at end to preserve storage layout)
+    uint256 public aggregateActiveEscrow; // sum of order.escrow for all non-deleted orders
+    uint256 public aggregateActiveWithdrawn; // sum of orderEscrowWithdrawn for all non-deleted orders
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -215,6 +219,8 @@ contract FileMarket {
         // Add to active orders for random selection
         activeOrders.push(orderId);
         orderIndexInActive[orderId] = activeOrders.length - 1;
+
+        aggregateActiveEscrow += totalCost;
 
         emit OrderPlaced(orderId, msg.sender, _maxSize, _periods, _replicas);
 
@@ -478,6 +484,10 @@ contract FileMarket {
         uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
         address orderOwner = order.owner;
 
+        // Update aggregates before delete zeroes the struct
+        aggregateActiveEscrow -= order.escrow;
+        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+
         delete orders[_orderId];
         delete orderToNodes[_orderId];
 
@@ -515,6 +525,11 @@ contract FileMarket {
         }
 
         _removeFromActiveOrders(_orderId);
+
+        // Update aggregates before delete zeroes the struct
+        aggregateActiveEscrow -= order.escrow;
+        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+
         delete orders[_orderId];
         delete orderToNodes[_orderId];
 
@@ -857,6 +872,7 @@ contract FileMarket {
 
         nodeOrderEarnings[_orderId][_node] += claimableFromOrder;
         orderEscrowWithdrawn[_orderId] += claimableFromOrder;
+        aggregateActiveWithdrawn += claimableFromOrder;
         nodeEarnings[_node] += claimableFromOrder;
     }
 
@@ -1315,6 +1331,10 @@ contract FileMarket {
         uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
         address orderOwner = order.owner;
 
+        // Update aggregates before delete zeroes the struct
+        aggregateActiveEscrow -= order.escrow;
+        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+
         delete orders[_orderId];
         delete orderToNodes[_orderId];
 
@@ -1518,14 +1538,9 @@ contract FileMarket {
         activeOrdersCount = activeOrders.length;
         challengeableOrdersCount = challengeableOrders.length;
 
-        // Calculate total escrow locked across all active orders
-        for (uint256 i = 1; i < nextOrderId; i++) {
-            if (orders[i].owner != address(0)) {
-                totalEscrowLocked += orders[i].escrow - orderEscrowWithdrawn[i];
-            }
-        }
+        totalEscrowLocked = aggregateActiveEscrow - aggregateActiveWithdrawn;
 
-        // Get node network statistics
+        // Get node network statistics (O(1) via incremental aggregates)
         (totalNodes, totalCapacityStaked, totalCapacityUsed) = nodeStaking.getNetworkStats();
 
         currentRandomnessValue = currentRandomness;
@@ -1633,16 +1648,11 @@ contract FileMarket {
     {
         totalContractBalance = address(this).balance;
 
-        // Calculate total escrow and rewards paid
-        for (uint256 i = 1; i < nextOrderId; i++) {
-            if (orders[i].owner != address(0)) {
-                totalEscrowHeld += orders[i].escrow - orderEscrowWithdrawn[i];
-                totalRewardsPaid += orderEscrowWithdrawn[i];
-            }
-        }
+        totalEscrowHeld = aggregateActiveEscrow - aggregateActiveWithdrawn;
+        totalRewardsPaid = aggregateActiveWithdrawn;
 
         uint256 totalOrders = nextOrderId - 1;
-        averageOrderValue = totalOrders > 0 ? (totalEscrowHeld + totalRewardsPaid) / totalOrders : 0;
+        averageOrderValue = totalOrders > 0 ? aggregateActiveEscrow / totalOrders : 0;
 
         (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
         totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();

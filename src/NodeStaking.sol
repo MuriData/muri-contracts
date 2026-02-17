@@ -37,6 +37,12 @@ contract NodeStaking {
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
     // ------------------------------------------------------------------
+    // Incremental network aggregates (O(1) stats)
+    // ------------------------------------------------------------------
+    uint256 public globalTotalCapacity; // sum of all node capacities (bytes)
+    uint256 public globalTotalUsed; // sum of all node used (bytes)
+
+    // ------------------------------------------------------------------
     // Reentrancy guard
     // ------------------------------------------------------------------
     uint256 private _locked = 1;
@@ -89,6 +95,8 @@ contract NodeStaking {
         nodeIndexInList[msg.sender] = nodeList.length;
         nodeList.push(msg.sender);
 
+        globalTotalCapacity += _capacity;
+
         emit NodeStaked(msg.sender, requiredStake, _capacity);
     }
 
@@ -105,6 +113,8 @@ contract NodeStaking {
         info.capacity += _additionalCapacity;
         info.stake += additionalStake;
 
+        globalTotalCapacity += _additionalCapacity;
+
         emit NodeCapacityIncreased(msg.sender, additionalStake, info.capacity);
     }
 
@@ -120,6 +130,8 @@ contract NodeStaking {
         uint256 stakeToRelease = uint256(_reduceCapacity) * STAKE_PER_BYTE;
         info.capacity -= _reduceCapacity;
         info.stake -= stakeToRelease;
+
+        globalTotalCapacity -= _reduceCapacity;
 
         // Transfer released stake back to node
         (bool success,) = msg.sender.call{value: stakeToRelease}("");
@@ -156,6 +168,9 @@ contract NodeStaking {
         require(info.used == 0, "cannot unstake while storing data");
 
         uint256 stakeToReturn = info.stake;
+
+        globalTotalCapacity -= info.capacity;
+        // used == 0 per require above, no globalTotalUsed change
 
         // Remove node info mapping entry entirely
         delete nodes[msg.sender];
@@ -200,6 +215,7 @@ contract NodeStaking {
         NodeInfo storage info = nodes[node];
         require(info.capacity > 0, "not a node");
         require(newUsed <= info.capacity, "used exceeds capacity");
+        globalTotalUsed = globalTotalUsed - info.used + newUsed;
         info.used = newUsed;
     }
 
@@ -233,6 +249,10 @@ contract NodeStaking {
         require(info.capacity > 0, "not a node");
         require(slashAmount > 0, "invalid slash amount");
         require(slashAmount <= info.stake, "slash exceeds stake");
+
+        // Snapshot for aggregate update
+        uint64 oldCapacity = info.capacity;
+        uint64 oldUsed = info.used;
 
         // Reduce stake
         info.stake -= slashAmount;
@@ -295,6 +315,10 @@ contract NodeStaking {
             delete nodeIndexInList[node];
             delete nodes[node];
         }
+
+        // Update aggregates: info may be zeroed by delete, which is correct
+        globalTotalCapacity = globalTotalCapacity - oldCapacity + info.capacity;
+        globalTotalUsed = globalTotalUsed - oldUsed + info.used;
     }
 
     /// @notice Emergency function to force reduce a node's used capacity (called by market after forced order exits)
@@ -304,6 +328,7 @@ contract NodeStaking {
         NodeInfo storage info = nodes[node];
         require(info.capacity > 0, "not a node");
         require(newUsed <= info.capacity, "new used exceeds capacity");
+        globalTotalUsed = globalTotalUsed - info.used + newUsed;
         info.used = newUsed;
     }
 
@@ -349,22 +374,12 @@ contract NodeStaking {
         }
     }
 
-    /// @notice Get network-wide statistics for monitoring
+    /// @notice Get network-wide statistics for monitoring (O(1) via incremental aggregates)
     function getNetworkStats()
         external
         view
         returns (uint256 totalNodes, uint256 totalCapacityStaked, uint256 totalCapacityUsed)
     {
-        // Note: This is a simplified O(n) implementation
-        // In production, you'd want to maintain these counters incrementally
-        for (uint256 i = 0; i < nodeList.length; i++) {
-            address nodeAddr = nodeList[i];
-            NodeInfo storage info = nodes[nodeAddr];
-            if (info.capacity > 0) {
-                totalNodes++;
-                totalCapacityStaked += info.capacity;
-                totalCapacityUsed += info.used;
-            }
-        }
+        return (nodeList.length, globalTotalCapacity, globalTotalUsed);
     }
 }
