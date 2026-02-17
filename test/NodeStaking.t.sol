@@ -19,6 +19,12 @@ contract NodeStakingTest is Test {
     event NodeCapacityDecreased(address indexed node, uint256 releasedStake, uint64 newCapacity);
     event NodeUnstaked(address indexed node, uint256 stakeReturned);
 
+    // Implement IMarketProverCheck so NodeStaking's obligation check succeeds.
+    // Individual tests can override via vm.mockCall when they need to simulate locked provers.
+    function hasUnresolvedProofObligation(address) external pure returns (bool) {
+        return false;
+    }
+
     function setUp() public {
         // Set the test contract as the authorized market so tests can call updateNodeUsed
         nodeStaking = new NodeStaking(address(this));
@@ -980,6 +986,56 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA, 0xBBBB);
         assertTrue(nodeStaking.isValidNode(node1), "node should be valid after re-stake");
+    }
+
+    // ===== PROOF OBLIGATION LOCK TESTS =====
+
+    /// @notice decreaseCapacity reverts when the market reports an unresolved proof obligation.
+    function test_DecreaseCapacity_RevertWhenProverObligated() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA, 0xBBBB);
+
+        // Mock the market to return true for node1's obligation check
+        vm.mockCall(
+            address(this), abi.encodeWithSignature("hasUnresolvedProofObligation(address)", node1), abi.encode(true)
+        );
+
+        vm.prank(node1);
+        vm.expectRevert("unresolved proof obligation");
+        nodeStaking.decreaseCapacity(500);
+
+        // Clear mock — should succeed after obligation resolved
+        vm.clearMockedCalls();
+
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(500);
+    }
+
+    /// @notice unstakeNode reverts when the market reports an unresolved proof obligation.
+    function test_UnstakeNode_RevertWhenProverObligated() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA, 0xBBBB);
+
+        // Mock the market to return true for node1's obligation check
+        vm.mockCall(
+            address(this), abi.encodeWithSignature("hasUnresolvedProofObligation(address)", node1), abi.encode(true)
+        );
+
+        vm.prank(node1);
+        vm.expectRevert("unresolved proof obligation");
+        nodeStaking.unstakeNode();
+
+        // Clear mock — should succeed after obligation resolved
+        vm.clearMockedCalls();
+
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
     }
 }
 

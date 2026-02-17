@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+interface IMarketProverCheck {
+    function hasUnresolvedProofObligation(address node) external view returns (bool);
+}
+
 contract NodeStaking {
     // The only contract authorized to update node usage.
     address public immutable market;
@@ -108,6 +112,7 @@ contract NodeStaking {
     /// @dev Node can only decrease capacity down to at least `used` bytes.
     /// @param _reduceCapacity Bytes to reduce from the current capacity.
     function decreaseCapacity(uint64 _reduceCapacity) external nonReentrant {
+        require(!IMarketProverCheck(market).hasUnresolvedProofObligation(msg.sender), "unresolved proof obligation");
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity > 0, "not a node");
         require(_reduceCapacity > 0 && _reduceCapacity <= info.capacity - info.used, "cannot reduce below used");
@@ -145,6 +150,7 @@ contract NodeStaking {
 
     /// @notice Fully exit as a storage node and withdraw all stake. Can only be called when no data is stored.
     function unstakeNode() external nonReentrant {
+        require(!IMarketProverCheck(market).hasUnresolvedProofObligation(msg.sender), "unresolved proof obligation");
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity > 0, "not a node");
         require(info.used == 0, "cannot unstake while storing data");

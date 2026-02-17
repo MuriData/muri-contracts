@@ -4391,6 +4391,47 @@ contract MarketTest is Test {
         // Verify pending randomness was applied (commitment from primary proof)
         assertEq(market.pendingRandomness(), 0, "pending randomness should be consumed");
     }
+
+    /// @notice A challenged primary prover cannot decrease capacity to evade slashing.
+    function test_ChallengedProverCannotDecreaseCapacity() public {
+        // Stake node1 with ZK keys and extra capacity beyond what orders use
+        uint64 bigCap = TEST_CAPACITY * 2;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, ZK_PUB_KEY_X, ZK_PUB_KEY_Y);
+
+        // Place order with ZK file root so the proof fixture works
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: ZK_FILE_ROOT, uri: "QmZKTest"});
+        uint256 totalCost = uint256(256) * 4 * 1e12;
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, 256, 4, 1, 1e12);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance time, set up challenge with node1 as primary
+        uint256 t0 = block.timestamp + STEP + 1;
+        vm.warp(t0);
+        _setupZKChallenge(node1, orderId);
+
+        // node1 tries to drain free capacity before slash — should be blocked
+        uint64 freeCapacity = bigCap - 256; // capacity not used by orders
+        vm.prank(node1);
+        vm.expectRevert("unresolved proof obligation");
+        nodeStaking.decreaseCapacity(freeCapacity);
+
+        // node1 also cannot unstake
+        vm.prank(node1);
+        vm.expectRevert("unresolved proof obligation");
+        nodeStaking.unstakeNode();
+
+        // After submitting proof, the obligation is resolved — decrease allowed
+        vm.prank(node1);
+        market.submitProof(_zkProof(), ZK_COMMITMENT);
+
+        vm.prank(node1);
+        nodeStaking.decreaseCapacity(freeCapacity); // should succeed now
+    }
 }
 
 // Malicious contract to test reentrancy on FileMarket.claimRewards

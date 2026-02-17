@@ -313,6 +313,11 @@ contract FileMarket {
     /// @notice Check if a node has an unresolved proof obligation from the current challenge.
     /// Returns true if the node is a primary or secondary prover that hasn't submitted proof
     /// and hasn't been slashed yet. Used to prevent provers from escaping slashing by quitting.
+    /// @notice Check if a node has an unresolved proof obligation (used by NodeStaking to block withdrawals)
+    function hasUnresolvedProofObligation(address _node) external view returns (bool) {
+        return _isUnresolvedProver(_node);
+    }
+
     function _isUnresolvedProver(address _node) internal view returns (bool) {
         if (!challengeInitialized) return false;
 
