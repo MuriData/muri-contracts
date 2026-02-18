@@ -14,6 +14,7 @@ contract FileMarket {
     uint256 constant CLEANUP_BATCH_SIZE = 10; // expired orders processed per cleanup call
     uint256 constant CLEANUP_SCAN_CAP = 50; // max entries scanned per _cleanupExpiredOrders call
     uint256 constant MAX_CHALLENGE_SELECTION_PROBES = 200; // cap non-eviction probes in challenge selection
+    uint256 constant MAX_CHALLENGE_EVICTIONS = 50; // max expired-order evictions per selection call
     uint256 immutable GENESIS_TS; // contract deploy timestamp
     address public owner;
     mapping(address => bool) public slashAuthorities;
@@ -430,7 +431,8 @@ contract FileMarket {
 
     /// @notice Select non-expired challengeable orders with inline eviction of expired entries.
     /// Uses random probing bounded by MAX_CHALLENGE_SELECTION_PROBES to limit gas.
-    /// Evictions don't count toward the cap since each shrinks the array.
+    /// Evictions are capped by MAX_CHALLENGE_EVICTIONS to prevent OOG when the
+    /// expired backlog is large; remaining evictions are deferred to later heartbeats.
     function _selectChallengeableOrders(uint256 _randomSeed, uint256 _desiredCount)
         internal
         returns (uint256[] memory result)
@@ -439,15 +441,20 @@ contract FileMarket {
         uint256 found = 0;
         uint256 nonce = 0; // hash seed (always increments)
         uint256 probes = 0; // non-eviction probes (bounded by cap)
+        uint256 evictions = 0; // expired-order evictions (bounded by cap)
 
-        while (found < _desiredCount && challengeableOrders.length > 0 && probes < MAX_CHALLENGE_SELECTION_PROBES) {
+        while (
+            found < _desiredCount && challengeableOrders.length > 0 && probes < MAX_CHALLENGE_SELECTION_PROBES
+                && evictions < MAX_CHALLENGE_EVICTIONS
+        ) {
             uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce))) % challengeableOrders.length;
             uint256 orderId = challengeableOrders[idx];
             nonce++;
 
             if (isOrderExpired(orderId)) {
                 _removeFromChallengeableOrders(orderId);
-                continue; // eviction doesn't count toward probe cap
+                evictions++;
+                continue;
             }
 
             probes++;

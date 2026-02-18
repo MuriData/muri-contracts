@@ -4986,6 +4986,62 @@ contract MarketTest is Test {
         assertGt(remaining, 0, "long-lived orders should still be challengeable");
     }
 
+    /// @notice With >50 expired challengeable orders, a single heartbeat must
+    ///         not OOG. Evictions are capped at MAX_CHALLENGE_EVICTIONS (50)
+    ///         per selection call; repeated heartbeats drain the backlog.
+    function test_ChallengeSelection_EvictionCapBoundsGas() public {
+        // Two nodes to stay under MAX_ORDERS_PER_NODE (50) each
+        uint64 bigCap = TEST_CAPACITY * 40;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0x1234, 0x5678);
+        vm.deal(node2, bigStake);
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0xabcd, 0xef01);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 1; // tiny to minimise escrow
+        uint256 price = 1; // 1 wei per byte per period
+        uint256 cost = uint256(maxSize) * 1 * price;
+
+        // Place and execute 70 short-lived orders (> MAX_CHALLENGE_EVICTIONS of 50)
+        // Split across two nodes to stay under per-node cap
+        for (uint256 i = 0; i < 70; i++) {
+            address creator = address(uint160(0xA000 + i));
+            vm.deal(creator, cost);
+            vm.prank(creator);
+            uint256 oid = market.placeOrder{value: cost}(fileMeta, maxSize, 1, 1, price);
+            vm.prank(i < 35 ? node1 : node2);
+            market.executeOrder(oid);
+        }
+
+        assertEq(market.getChallengeableOrdersCount(), 70);
+
+        // Expire all orders
+        vm.warp(block.timestamp + PERIOD + STEP * 3);
+
+        // First heartbeat: evicts up to MAX_CHALLENGE_EVICTIONS (50) from challengeable
+        // plus _cleanupExpiredOrders processes up to CLEANUP_BATCH_SIZE (10) from active.
+        uint256 gasBefore = gasleft();
+        market.triggerHeartbeat();
+        uint256 gasUsed = gasBefore - gasleft();
+
+        // Must complete within reasonable gas (not OOG)
+        assertTrue(gasUsed < 10_000_000, "heartbeat gas must be bounded");
+
+        // Some expired orders remain — not all evicted in one pass
+        uint256 afterFirst = market.getChallengeableOrdersCount();
+        assertTrue(afterFirst < 70, "some expired orders evicted");
+
+        // Second heartbeat drains more of the backlog
+        vm.warp(block.timestamp + STEP * 3);
+        market.triggerHeartbeat();
+
+        uint256 afterSecond = market.getChallengeableOrdersCount();
+        assertTrue(afterSecond < afterFirst, "second heartbeat drains more expired orders");
+    }
+
     // =========================================================================
     // Financial stats: lifetime monotonic counters
     // =========================================================================
