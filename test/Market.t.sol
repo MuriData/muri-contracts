@@ -334,12 +334,18 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.executeOrder(orderId);
 
+        // Advance 1 period so the node is eligible for cancellation penalty
+        vm.warp(block.timestamp + PERIOD);
+
         // Cancel order (with penalty due to node storage)
         vm.prank(user1);
         market.cancelOrder(orderId);
 
-        uint256 penalty = totalCost / 10; // 10% penalty
-        uint256 expectedRefund = totalCost - penalty;
+        // 1 period of service rewards settled first
+        uint256 reward = uint256(maxSize) * price * 1;
+        uint256 remainingEscrow = totalCost - reward;
+        uint256 penalty = remainingEscrow / 10; // 10% of remaining
+        uint256 expectedRefund = remainingEscrow - penalty;
 
         // Refund is queued as pull-payment
         assertEq(market.pendingRefunds(user1), expectedRefund, "refund queued minus penalty");
@@ -351,8 +357,8 @@ contract MarketTest is Test {
         uint256 balanceAfter = user1.balance;
         assertEq(balanceAfter - balanceBefore, expectedRefund);
 
-        // Penalty should be credited to the node that was serving
-        assertEq(market.nodePendingRewards(node1), penalty, "penalty distributed to node");
+        // Penalty + reward should be credited to the node that was serving
+        assertEq(market.nodePendingRewards(node1), reward + penalty, "reward + penalty distributed to node");
         assertEq(market.totalCancellationPenalties(), penalty, "penalty tracked");
     }
 
@@ -605,18 +611,24 @@ contract MarketTest is Test {
         vm.prank(node2);
         market.executeOrder(orderId);
 
-        // Cancel immediately — full escrow remaining, no rewards settled yet
+        // Advance 1 period so both nodes are eligible for penalty
+        vm.warp(block.timestamp + PERIOD);
+
         vm.prank(user1);
         market.cancelOrder(orderId);
 
-        uint256 penalty = totalCost / 10;
-        uint256 expectedRefund = totalCost - penalty;
+        // 1 period of rewards per node settled first
+        uint256 rewardPerNode = uint256(maxSize) * price * 1;
+        uint256 totalReward = rewardPerNode * 2;
+        uint256 remainingEscrow = totalCost - totalReward;
+        uint256 penalty = remainingEscrow / 10;
+        uint256 expectedRefund = remainingEscrow - penalty;
         uint256 perNode = penalty / 2;
         // Last node gets remainder to avoid rounding dust
         uint256 lastNodeShare = penalty - perNode;
 
-        assertEq(market.nodePendingRewards(node1), perNode, "node1 penalty share");
-        assertEq(market.nodePendingRewards(node2), lastNodeShare, "node2 penalty share");
+        assertEq(market.nodePendingRewards(node1), rewardPerNode + perNode, "node1 reward + penalty share");
+        assertEq(market.nodePendingRewards(node2), rewardPerNode + lastNodeShare, "node2 reward + penalty share");
         assertEq(market.totalCancellationPenalties(), penalty, "total penalties tracked");
         assertEq(market.pendingRefunds(user1), expectedRefund, "refund queued");
 
@@ -624,12 +636,113 @@ contract MarketTest is Test {
         uint256 node1Before = node1.balance;
         vm.prank(node1);
         market.claimRewards();
-        assertEq(node1.balance - node1Before, perNode, "node1 claims penalty");
+        assertEq(node1.balance - node1Before, rewardPerNode + perNode, "node1 claims reward + penalty");
 
         uint256 node2Before = node2.balance;
         vm.prank(node2);
         market.claimRewards();
-        assertEq(node2.balance - node2Before, lastNodeShare, "node2 claims penalty");
+        assertEq(node2.balance - node2Before, rewardPerNode + lastNodeShare, "node2 claims reward + penalty");
+    }
+
+    /// @notice A node that front-runs cancelOrder by joining in the same block
+    ///         must receive zero penalty (zero-service MEV siphon prevention).
+    function test_CancellationPenalty_MEVSiphonPrevented() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 512;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+
+        // Node front-runs cancel in same block
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Cancel in same block — node has NOT served a full period
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // No penalty should be charged — full escrow refunded
+        assertEq(market.pendingRefunds(user1), totalCost, "full refund when no eligible nodes");
+        assertEq(market.nodePendingRewards(node1), 0, "zero-service node gets no penalty");
+        assertEq(market.totalCancellationPenalties(), 0, "no penalties tracked");
+    }
+
+    /// @notice When no node has served a full period, cancellation should not
+    ///         charge any penalty — the full remaining escrow is refunded.
+    function test_CancellationPenalty_NoPenaltyWhenAllNodesNew() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 2, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+        vm.prank(node2);
+        market.executeOrder(orderId);
+
+        // Cancel same block — neither node has served a full period
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        assertEq(market.pendingRefunds(user1), totalCost, "full refund, no penalty");
+        assertEq(market.nodePendingRewards(node1), 0, "node1 gets nothing");
+        assertEq(market.nodePendingRewards(node2), 0, "node2 gets nothing");
+    }
+
+    /// @notice Mixed eligibility: one long-serving node gets penalty,
+    ///         a same-block joiner gets nothing.
+    function test_CancellationPenalty_MixedEligibility() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 4;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2;
+
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 2, price);
+
+        // node1 joins early
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 period — node1 has served a full period
+        vm.warp(block.timestamp + PERIOD);
+
+        // node2 joins just before cancel (same block)
+        vm.prank(node2);
+        market.executeOrder(orderId);
+
+        // Cancel — node1 eligible, node2 not
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // Both nodes get 1-period rewards settled (node2 earns 0 via ceiling math)
+        uint256 node1Reward = uint256(maxSize) * price * 1;
+        uint256 remainingEscrow = totalCost - node1Reward; // node2 earned 0
+        uint256 penalty = remainingEscrow / 10;
+        uint256 expectedRefund = remainingEscrow - penalty;
+
+        // Only node1 gets the full penalty (sole eligible node)
+        assertEq(market.pendingRefunds(user1), expectedRefund, "refund minus penalty for eligible node only");
+        uint256 node1Pending = market.nodePendingRewards(node1);
+        assertEq(node1Pending, node1Reward + penalty, "node1 gets reward + full penalty");
+        assertEq(market.nodePendingRewards(node2), 0, "node2 gets nothing (joined same block)");
+        assertEq(market.totalCancellationPenalties(), penalty, "penalty tracked");
     }
 
     function test_RevertWhen_ExecuteOrderAfterExpiry() public {
@@ -2769,15 +2882,17 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        // Cancel immediately — no periods elapsed, so no node rewards settled
+        // Advance 1 period so node is eligible for cancellation penalty
+        vm.warp(block.timestamp + PERIOD);
+
         vm.prank(user1);
         market.cancelOrder(orderId);
 
-        // remainingEscrow = totalCost - 0 = totalCost (no rewards paid yet)
-        // penalty = totalCost / 10
-        // refund from cancel = totalCost - penalty
-        uint256 penalty = totalCost / 10;
-        uint256 cancelRefund = totalCost - penalty;
+        // 1 period of rewards settled, then penalty on remaining
+        uint256 reward = uint256(maxSize) * price * 1;
+        uint256 remainingEscrow = totalCost - reward;
+        uint256 penalty = remainingEscrow / 10;
+        uint256 cancelRefund = remainingEscrow - penalty;
         uint256 totalPending = excess + cancelRefund;
 
         assertEq(market.pendingRefunds(user1), totalPending, "exact refund: excess + cancel refund");

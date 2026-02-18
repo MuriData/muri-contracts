@@ -559,18 +559,37 @@ contract FileMarket {
         // Snapshot assigned nodes before settlement empties the array
         address[] memory assignedNodes = orderToNodes[_orderId];
 
+        // Identify nodes eligible for cancellation penalty (served >= 1 full period).
+        // Must be computed before _settleAndReleaseNodes deletes timestamps.
+        // Uses the same ceiling-division start period as reward math to prevent
+        // MEV nodes from front-running cancelOrder to siphon penalty funds.
         uint256 settlePeriod = currentPeriod();
+        uint256 eligibleCount = 0;
+        address[] memory eligibleNodes = new address[](assignedNodes.length);
+        for (uint256 i = 0; i < assignedNodes.length; i++) {
+            uint256 startTs = nodeOrderStartTimestamp[assignedNodes[i]][_orderId];
+            uint256 elapsed = startTs - GENESIS_TS;
+            uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
+            if (settlePeriod > nodeStartPeriod) {
+                eligibleNodes[eligibleCount] = assignedNodes[i];
+                eligibleCount++;
+            }
+        }
+
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Clean up order data
         uint256 remainingEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
         uint256 refundAmount = remainingEscrow;
-        if (assignedNodes.length > 0 && remainingEscrow > 0) {
+        if (eligibleCount > 0 && remainingEscrow > 0) {
             uint256 penalty = remainingEscrow / 10; // 10% penalty
             refundAmount -= penalty;
 
-            // Distribute penalty to nodes that were serving this order
-            _distributeCancellationPenalty(_orderId, penalty, assignedNodes);
+            // Distribute penalty only to nodes that actually served
+            assembly {
+                mstore(eligibleNodes, eligibleCount)
+            }
+            _distributeCancellationPenalty(_orderId, penalty, eligibleNodes);
         }
 
         _removeFromActiveOrders(_orderId);
