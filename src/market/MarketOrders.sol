@@ -456,23 +456,30 @@ abstract contract MarketOrders is MarketAdmin {
         uint256 slashPeriods = QUIT_SLASH_PERIODS < remainingPeriods ? QUIT_SLASH_PERIODS : remainingPeriods;
         uint256 slashAmount = uint256(order.maxSize) * order.price * slashPeriods;
 
-        // Cap to available stake to prevent revert
-        (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(msg.sender);
+        // Cap to available stake to prevent revert.
+        // Then enforce that the slash still leaves enough collateral to keep
+        // all other assignments (excluding the order being quit).
+        (uint256 nodeStake,, uint64 usedBeforeQuit,,) = nodeStaking.getNodeInfo(msg.sender);
         if (slashAmount > nodeStake) {
             slashAmount = nodeStake;
         }
+        require(usedBeforeQuit >= order.maxSize, "invalid node usage");
+
+        uint256 stakePerByte = nodeStaking.STAKE_PER_BYTE();
+        uint64 usedAfterQuit = usedBeforeQuit - order.maxSize;
+        uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * stakePerByte;
+        uint256 maxSafeSlash = nodeStake > requiredStakeAfterQuit ? nodeStake - requiredStakeAfterQuit : 0;
+        require(slashAmount <= maxSafeSlash, "insufficient collateral for quit slash");
+
+        // Remove the specific assignment first so slashing cannot be used as a
+        // cheap path to force-exit unrelated orders.
+        _removeNodeFromOrder(msg.sender, _orderId, nodeIndex);
 
         // Apply slash to node's stake (no reporter reward for voluntary quit)
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
         _distributeSlashFunds(address(0), msg.sender, totalSlashed);
 
-        // If slashing caused forced order exits, handle them
-        if (forcedOrderExit) {
-            _handleForcedOrderExits(msg.sender);
-        } else {
-            // Normal quit - just remove this order
-            _removeNodeFromOrder(msg.sender, _orderId, nodeIndex);
-        }
+        require(!forcedOrderExit, "quit caused forced exit");
 
         emit NodeQuit(_orderId, msg.sender, slashAmount);
     }

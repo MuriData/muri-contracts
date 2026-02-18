@@ -1230,6 +1230,53 @@ contract MarketTest is Test {
         assertEq(used, 0);
     }
 
+    function test_QuitOrder_TinySlashCannotForceExitOtherOrders() public {
+        // Capacity exactly fits one large order + one tiny order.
+        uint64 capacity = 257;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        vm.deal(node1, stake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+
+        MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+
+        // Large order (the one attacker wants to escape).
+        uint64 largeSize = 256;
+        uint16 periods = 4;
+        uint256 largePrice = 1e12;
+        uint256 largeCost = uint256(largeSize) * uint256(periods) * largePrice;
+        vm.prank(user1);
+        uint256 largeOrderId = market.placeOrder{value: largeCost}(fileMeta, largeSize, periods, 1, largePrice);
+
+        // Tiny cheap order used as the old forced-exit trigger.
+        uint64 tinySize = 1;
+        uint256 tinyPrice = 1;
+        uint256 tinyCost = uint256(tinySize) * uint256(periods) * tinyPrice;
+        vm.prank(user1);
+        uint256 tinyOrderId = market.placeOrder{value: tinyCost}(fileMeta, tinySize, periods, 1, tinyPrice);
+
+        vm.startPrank(node1);
+        market.executeOrder(largeOrderId);
+        market.executeOrder(tinyOrderId);
+        market.quitOrder(tinyOrderId);
+        vm.stopPrank();
+
+        // Quitting the tiny order must not force-exit the large order assignment.
+        address[] memory largeNodes = market.getOrderNodes(largeOrderId);
+        assertEq(largeNodes.length, 1, "large order must stay assigned");
+        assertEq(largeNodes[0], node1, "node still serves large order");
+
+        address[] memory tinyNodes = market.getOrderNodes(tinyOrderId);
+        assertEq(tinyNodes.length, 0, "tiny order should be released");
+
+        uint256[] memory nodeOrders = market.getNodeOrders(node1);
+        assertEq(nodeOrders.length, 1, "node should keep exactly one order");
+        assertEq(nodeOrders[0], largeOrderId, "remaining order should be the large one");
+
+        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(used, largeSize, "used capacity should only reflect large order");
+    }
+
     // -------------------------------------------------------------------------
     // slashNode (external) edge cases
     // -------------------------------------------------------------------------
