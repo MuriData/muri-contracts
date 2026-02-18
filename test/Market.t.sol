@@ -4730,6 +4730,223 @@ contract MarketTest is Test {
         assertEq(escrowHeld, totalCost - expectedReward, "escrow held = total - rewards");
     }
 
+    // =========================================================================
+    // Challenge selection: inline-eviction tests
+    // =========================================================================
+
+    /// @notice 10 orders executed, 8 expired; heartbeat selects only non-expired;
+    ///         challengeableOrders shrank by at least the expired count.
+    function test_ChallengeSelection_SkipsExpiredOrders() public {
+        uint64 bigCap = TEST_CAPACITY * 20;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+
+        // Place 8 short-lived (1 period) orders and 2 long-lived (4 periods)
+        uint256[] memory shortIds = new uint256[](8);
+        uint256[] memory longIds = new uint256[](2);
+
+        for (uint256 i = 0; i < 8; i++) {
+            uint256 cost = uint256(maxSize) * 1 * price;
+            vm.prank(user1);
+            shortIds[i] = market.placeOrder{value: cost}(fileMeta, maxSize, 1, 1, price);
+            vm.prank(node1);
+            market.executeOrder(shortIds[i]);
+        }
+        for (uint256 i = 0; i < 2; i++) {
+            uint256 cost = uint256(maxSize) * 4 * price;
+            vm.prank(user1);
+            longIds[i] = market.placeOrder{value: cost}(fileMeta, maxSize, 4, 1, price);
+            vm.prank(node1);
+            market.executeOrder(longIds[i]);
+        }
+
+        assertEq(market.getChallengeableOrdersCount(), 10);
+
+        // Expire the 8 short orders
+        vm.warp(block.timestamp + PERIOD + STEP * 3);
+        market.triggerHeartbeat();
+
+        // Challenged orders must all be non-expired
+        (,,,, uint256[] memory challenged,,) = market.getCurrentChallengeInfo();
+        for (uint256 k = 0; k < challenged.length; k++) {
+            assertFalse(market.isOrderExpired(challenged[k]), "expired order should not be challenged");
+        }
+
+        // challengeableOrders should have shrunk (expired evicted during selection)
+        uint256 remaining = market.getChallengeableOrdersCount();
+        assertLe(remaining, 2, "at most 2 non-expired orders should remain challengeable");
+    }
+
+    /// @notice All orders expired; heartbeat yields zero selection; all evicted from challengeableOrders.
+    function test_ChallengeSelection_AllExpiredYieldsEmpty() public {
+        uint64 bigCap = TEST_CAPACITY * 20;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+        uint256 cost = uint256(maxSize) * 1 * price;
+
+        // Place and execute 15 short-lived orders (more than CLEANUP_BATCH_SIZE)
+        for (uint256 i = 0; i < 15; i++) {
+            vm.prank(user1);
+            uint256 oid = market.placeOrder{value: cost}(fileMeta, maxSize, 1, 1, price);
+            vm.prank(node1);
+            market.executeOrder(oid);
+        }
+
+        assertEq(market.getChallengeableOrdersCount(), 15);
+
+        // Expire all
+        vm.warp(block.timestamp + PERIOD + STEP * 3);
+        market.triggerHeartbeat();
+
+        // No orders should be challenged
+        (,,,, uint256[] memory challenged,,) = market.getCurrentChallengeInfo();
+        assertEq(challenged.length, 0, "no orders should be challenged when all expired");
+
+        // All evicted from challengeableOrders
+        assertEq(market.getChallengeableOrdersCount(), 0, "all expired should be evicted");
+    }
+
+    /// @notice Orders with varying durations; after 1 period, only non-expired appear in challenge;
+    ///         repeated heartbeats clear backlog.
+    function test_ChallengeSelection_MixedExpiry() public {
+        uint64 bigCap = TEST_CAPACITY * 30;
+        uint256 bigStake = uint256(bigCap) * STAKE_PER_BYTE;
+        vm.deal(node1, bigStake);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: bigStake}(bigCap, 0x1234, 0x5678);
+
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+
+        // Place 10 orders: 5 with 1 period (expire soon) and 5 with 4 periods (survive)
+        uint256[] memory shortIds = new uint256[](5);
+        uint256[] memory longIds = new uint256[](5);
+
+        for (uint256 i = 0; i < 5; i++) {
+            uint256 shortCost = uint256(maxSize) * 1 * price;
+            vm.prank(user1);
+            shortIds[i] = market.placeOrder{value: shortCost}(fileMeta, maxSize, 1, 1, price);
+            vm.prank(node1);
+            market.executeOrder(shortIds[i]);
+
+            uint256 longCost = uint256(maxSize) * 4 * price;
+            vm.prank(user1);
+            longIds[i] = market.placeOrder{value: longCost}(fileMeta, maxSize, 4, 1, price);
+            vm.prank(node1);
+            market.executeOrder(longIds[i]);
+        }
+
+        assertEq(market.getChallengeableOrdersCount(), 10);
+
+        // Expire the 5 short orders
+        vm.warp(block.timestamp + PERIOD + STEP * 3);
+        market.triggerHeartbeat();
+
+        // All challenged orders must be non-expired
+        (,,,, uint256[] memory challenged,,) = market.getCurrentChallengeInfo();
+        for (uint256 k = 0; k < challenged.length; k++) {
+            assertFalse(market.isOrderExpired(challenged[k]), "expired order in challenge set");
+        }
+
+        // Second heartbeat to clear any remaining expired backlog
+        vm.warp(block.timestamp + STEP * 3);
+        market.triggerHeartbeat();
+
+        // Only long-lived orders should remain challengeable
+        uint256 remaining = market.getChallengeableOrdersCount();
+        assertLe(remaining, 5, "at most 5 long-lived orders should remain challengeable");
+        assertGt(remaining, 0, "long-lived orders should still be challengeable");
+    }
+
+    // =========================================================================
+    // Financial stats: lifetime monotonic counters
+    // =========================================================================
+
+    /// @notice totalRewardsPaid and averageOrderValue must not decrease after
+    ///         an order completes. Before the fix, both derived from active-scope
+    ///         aggregates that were decremented on completion.
+    function test_FinancialStats_LifetimeCountersMonotonic() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint16 periods = 1;
+        uint256 price = 1e12;
+        uint256 totalCost = uint256(maxSize) * periods * price;
+
+        // Place and execute an order
+        vm.prank(user1);
+        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, maxSize, periods, 1, price);
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        // Advance 1 period and claim rewards
+        vm.warp(block.timestamp + PERIOD);
+        vm.prank(node1);
+        market.claimRewards();
+
+        // Snapshot stats before completing the order
+        (,, uint256 rewardsBefore, uint256 avgBefore,) = market.getFinancialStats();
+        assertGt(rewardsBefore, 0, "rewards accrued before completion");
+        assertGt(avgBefore, 0, "average nonzero before completion");
+
+        // Complete the expired order (this previously zeroed the active aggregates)
+        vm.warp(block.timestamp + 1);
+        market.completeExpiredOrder(orderId);
+
+        // Lifetime counters must not decrease
+        (, uint256 escrowHeldAfter, uint256 rewardsAfter, uint256 avgAfter,) = market.getFinancialStats();
+        assertGe(rewardsAfter, rewardsBefore, "totalRewardsPaid must not decrease after completion");
+        assertGe(avgAfter, avgBefore, "averageOrderValue must not decrease after completion");
+        // Active escrow held can decrease — that's expected
+        assertEq(escrowHeldAfter, 0, "no active escrow after completion");
+    }
+
+    /// @notice Place two orders, complete one — lifetime totals stay correct.
+    function test_FinancialStats_PartialCompletion() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+        FileMarket.FileMeta memory fileMeta = FileMarket.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 100;
+        uint256 price = 1e12;
+
+        uint256 cost1 = uint256(maxSize) * 1 * price; // 1 period
+        uint256 cost2 = uint256(maxSize) * 4 * price; // 4 periods
+
+        vm.prank(user1);
+        uint256 oid1 = market.placeOrder{value: cost1}(fileMeta, maxSize, 1, 1, price);
+        vm.prank(node1);
+        market.executeOrder(oid1);
+
+        vm.prank(user1);
+        market.placeOrder{value: cost2}(fileMeta, maxSize, 4, 1, price);
+
+        // lifetimeEscrowDeposited = cost1 + cost2, even though only one order is executed
+        assertEq(market.lifetimeEscrowDeposited(), cost1 + cost2, "lifetime escrow after two placements");
+
+        // Expire and complete first order
+        vm.warp(block.timestamp + PERIOD + 1);
+        market.completeExpiredOrder(oid1);
+
+        // Lifetime counters unchanged by completion (only active aggregates shrink)
+        assertEq(market.lifetimeEscrowDeposited(), cost1 + cost2, "lifetime escrow preserved after completion");
+
+        // averageOrderValue = (cost1 + cost2) / 2
+        (,,, uint256 avgVal,) = market.getFinancialStats();
+        assertEq(avgVal, (cost1 + cost2) / 2, "average reflects lifetime escrow");
+    }
+
     function test_NodeStaking_GlobalAggregates() public {
         NodeStaking ns = market.nodeStaking();
 

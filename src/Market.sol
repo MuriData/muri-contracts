@@ -13,6 +13,7 @@ contract FileMarket {
     uint8 constant MAX_REPLICAS = 10; // cap replicas per order to bound settlement loop gas
     uint256 constant CLEANUP_BATCH_SIZE = 10; // expired orders processed per cleanup call
     uint256 constant CLEANUP_SCAN_CAP = 50; // max entries scanned per _cleanupExpiredOrders call
+    uint256 constant MAX_CHALLENGE_SELECTION_PROBES = 200; // cap non-eviction probes in challenge selection
     uint256 immutable GENESIS_TS; // contract deploy timestamp
     address public owner;
     mapping(address => bool) public slashAuthorities;
@@ -161,6 +162,10 @@ contract FileMarket {
     uint256 public aggregateActiveEscrow; // sum of order.escrow for all non-deleted orders
     uint256 public aggregateActiveWithdrawn; // sum of orderEscrowWithdrawn for all non-deleted orders
 
+    // Lifetime monotonic counters for dashboard accuracy (placed at end to preserve storage layout)
+    uint256 public lifetimeEscrowDeposited; // cumulative escrow deposited across all orders ever placed
+    uint256 public lifetimeRewardsPaid; // cumulative escrow paid to nodes as rewards
+
     // Events
     event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
@@ -221,6 +226,7 @@ contract FileMarket {
         orderIndexInActive[orderId] = activeOrders.length - 1;
 
         aggregateActiveEscrow += totalCost;
+        lifetimeEscrowDeposited += totalCost;
 
         emit OrderPlaced(orderId, msg.sender, _maxSize, _periods, _replicas);
 
@@ -419,6 +425,49 @@ contract FileMarket {
                 mapVals[mapLen] = valI;
                 mapLen++;
             }
+        }
+    }
+
+    /// @notice Select non-expired challengeable orders with inline eviction of expired entries.
+    /// Uses random probing bounded by MAX_CHALLENGE_SELECTION_PROBES to limit gas.
+    /// Evictions don't count toward the cap since each shrinks the array.
+    function _selectChallengeableOrders(uint256 _randomSeed, uint256 _desiredCount)
+        internal
+        returns (uint256[] memory result)
+    {
+        result = new uint256[](_desiredCount);
+        uint256 found = 0;
+        uint256 nonce = 0; // hash seed (always increments)
+        uint256 probes = 0; // non-eviction probes (bounded by cap)
+
+        while (found < _desiredCount && challengeableOrders.length > 0 && probes < MAX_CHALLENGE_SELECTION_PROBES) {
+            uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce))) % challengeableOrders.length;
+            uint256 orderId = challengeableOrders[idx];
+            nonce++;
+
+            if (isOrderExpired(orderId)) {
+                _removeFromChallengeableOrders(orderId);
+                continue; // eviction doesn't count toward probe cap
+            }
+
+            probes++;
+
+            // Duplicate check (selection count is small, O(found) scan is fine)
+            bool dup = false;
+            for (uint256 j = 0; j < found; j++) {
+                if (result[j] == orderId) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+
+            result[found] = orderId;
+            found++;
+        }
+
+        assembly {
+            mstore(result, found)
         }
     }
 
@@ -873,6 +922,7 @@ contract FileMarket {
         nodeOrderEarnings[_orderId][_node] += claimableFromOrder;
         orderEscrowWithdrawn[_orderId] += claimableFromOrder;
         aggregateActiveWithdrawn += claimableFromOrder;
+        lifetimeRewardsPaid += claimableFromOrder;
         nodeEarnings[_node] += claimableFromOrder;
     }
 
@@ -1040,23 +1090,8 @@ contract FileMarket {
             selectionCount = 1; // ensure we request at least one order
         }
 
-        // Select random orders for challenge from challengeable orders only (orders with assigned nodes)
-        uint256[] memory selectedOrders = _selectFromArray(challengeableOrders, currentRandomness, selectionCount);
-
-        // Filter out any expired orders that slipped past the capped cleanup pass,
-        // evicting them from challengeableOrders so future heartbeats won't re-select them.
-        uint256 validCount = 0;
-        for (uint256 i = 0; i < selectedOrders.length; i++) {
-            if (!isOrderExpired(selectedOrders[i])) {
-                selectedOrders[validCount] = selectedOrders[i];
-                validCount++;
-            } else {
-                _removeFromChallengeableOrders(selectedOrders[i]);
-            }
-        }
-        assembly {
-            mstore(selectedOrders, validCount)
-        }
+        // Select random non-expired orders for challenge, evicting expired entries on contact
+        uint256[] memory selectedOrders = _selectChallengeableOrders(currentRandomness, selectionCount);
 
         if (selectedOrders.length == 0) {
             // Clear stale challenge state so _isOrderUnderActiveChallenge() doesn't
@@ -1649,10 +1684,10 @@ contract FileMarket {
         totalContractBalance = address(this).balance;
 
         totalEscrowHeld = aggregateActiveEscrow - aggregateActiveWithdrawn;
-        totalRewardsPaid = aggregateActiveWithdrawn;
+        totalRewardsPaid = lifetimeRewardsPaid;
 
         uint256 totalOrders = nextOrderId - 1;
-        averageOrderValue = totalOrders > 0 ? aggregateActiveEscrow / totalOrders : 0;
+        averageOrderValue = totalOrders > 0 ? lifetimeEscrowDeposited / totalOrders : 0;
 
         (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
         totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();
