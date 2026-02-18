@@ -1,0 +1,8 @@
+{
+  "lib/forge-std": {
+    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+  },
+  "lib/muri-artifacts": {
+    "rev": "5c3931656460a3f3b5f178a2c81b525d41e299c2"
+  }
+}
