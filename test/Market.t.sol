@@ -1614,6 +1614,9 @@ contract MarketTest is Test {
     uint256 constant SLOT_CURRENT_PRIMARY_PROVER = 28;
     uint256 constant SLOT_NODE_TO_PROVE_ORDER_ID = 32;
     uint256 constant SLOT_CHALLENGE_INITIALIZED = 37;
+    uint256 constant SLOT_CHALLENGEABLE_ORDERS = 7;
+    uint256 constant SLOT_ORDER_INDEX_IN_CHALLENGEABLE = 8;
+    uint256 constant SLOT_IS_CHALLENGEABLE = 9;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;
@@ -1657,6 +1660,46 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(256) * 4 * 1e12;
         vm.prank(user1);
         orderId = market.placeOrder{value: totalCost}(fileMeta, 256, 4, 1, 1e12);
+    }
+
+    function _legacySelectorWouldBlackout(uint256 seed, uint256 totalEntries, uint256 liveIndex)
+        internal
+        pure
+        returns (bool)
+    {
+        uint256 len = totalEntries;
+        uint256 livePos = liveIndex;
+        uint256 nonce = 0;
+        uint256 evictions = 0;
+
+        while (len > 0 && evictions < 50) {
+            uint256 idx = uint256(keccak256(abi.encodePacked(seed, nonce))) % len;
+            nonce++;
+
+            // Legacy selector would find a non-expired order and avoid blackout.
+            if (idx == livePos) {
+                return false;
+            }
+
+            // Swap-pop removal of an expired entry moves the last element into idx.
+            uint256 last = len - 1;
+            if (livePos == last && idx != last) {
+                livePos = idx;
+            }
+            len--;
+            evictions++;
+        }
+
+        return true;
+    }
+
+    function _findLegacyBlackoutSeed(uint256 totalEntries, uint256 liveIndex) internal pure returns (uint256) {
+        for (uint256 seed = 1; seed <= 5000; seed++) {
+            if (_legacySelectorWouldBlackout(seed, totalEntries, liveIndex)) {
+                return seed;
+            }
+        }
+        revert("no legacy-blackout seed found");
     }
 
     function test_SubmitProof_PrimaryValid() public {
@@ -4285,6 +4328,58 @@ contract MarketTest is Test {
 
         uint256 afterSecond = market.getChallengeableOrdersCount();
         assertTrue(afterSecond < afterFirst, "second heartbeat drains more expired orders");
+    }
+
+    /// @notice Regression for legacy blackout path:
+    ///         when random sampling hit the eviction cap before seeing a live entry,
+    ///         heartbeat used to roll forward without assigning a primary prover.
+    function test_ChallengeSelection_FallbackPreventsLegacyBlackout() public {
+        _stakeTestNode(node1, 0x1234, 0x5678);
+
+        // Create one real, non-expired challengeable order.
+        MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
+        uint64 maxSize = 256;
+        uint256 price = 1e12;
+        uint256 cost = uint256(maxSize) * 4 * price;
+        vm.prank(user1);
+        uint256 liveOrderId = market.placeOrder{value: cost}(fileMeta, maxSize, 4, 1, price);
+        vm.prank(node1);
+        market.executeOrder(liveOrderId);
+
+        // Build a synthetic challengeable backlog:
+        // - 79 fake expired order IDs (non-existent => expired)
+        // - 1 real live order ID
+        uint256 totalEntries = 80;
+        uint256 liveIndex = 37;
+        uint256 seed = _findLegacyBlackoutSeed(totalEntries, liveIndex);
+        assertTrue(_legacySelectorWouldBlackout(seed, totalEntries, liveIndex), "seed must blackout legacy selector");
+
+        vm.store(address(market), bytes32(SLOT_CHALLENGEABLE_ORDERS), bytes32(totalEntries));
+        bytes32 challengeableBase = keccak256(abi.encode(uint256(SLOT_CHALLENGEABLE_ORDERS)));
+        uint256 fakeBaseId = 1_000_000;
+
+        for (uint256 i = 0; i < totalEntries; i++) {
+            uint256 oid = (i == liveIndex) ? liveOrderId : (fakeBaseId + i);
+            vm.store(address(market), bytes32(uint256(challengeableBase) + i), bytes32(oid));
+            vm.store(
+                address(market),
+                keccak256(abi.encode(oid, SLOT_ORDER_INDEX_IN_CHALLENGEABLE)),
+                bytes32(i)
+            );
+            vm.store(address(market), keccak256(abi.encode(oid, SLOT_IS_CHALLENGEABLE)), bytes32(uint256(1)));
+        }
+
+        // Force deterministic seed used by selector.
+        vm.store(address(market), bytes32(SLOT_CURRENT_RANDOMNESS), bytes32(seed));
+
+        vm.warp(block.timestamp + STEP + 1);
+        market.triggerHeartbeat();
+
+        // New selector must still challenge the live order and assign a primary.
+        assertEq(market.currentPrimaryProver(), node1, "primary prover should be assigned from live order");
+        (,,,, uint256[] memory challengedOrders,,) = market.getCurrentChallengeInfo();
+        assertEq(challengedOrders.length, 1, "selectionCount should be 1");
+        assertEq(challengedOrders[0], liveOrderId, "live order should be challenged");
     }
 
     // =========================================================================

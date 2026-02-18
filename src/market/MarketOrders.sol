@@ -254,24 +254,23 @@ abstract contract MarketOrders is MarketAdmin {
         result = new uint256[](_desiredCount);
         uint256 found = 0;
         uint256 nonce = 0; // hash seed (always increments)
-        uint256 probes = 0; // non-eviction probes (bounded by cap)
+        uint256 attempts = 0; // bounded random attempts
         uint256 evictions = 0; // expired-order evictions (bounded by cap)
+        uint256 maxAttempts = MAX_CHALLENGE_SELECTION_PROBES + MAX_CHALLENGE_EVICTIONS;
 
-        while (
-            found < _desiredCount && challengeableOrders.length > 0 && probes < MAX_CHALLENGE_SELECTION_PROBES
-                && evictions < MAX_CHALLENGE_EVICTIONS
-        ) {
+        while (found < _desiredCount && challengeableOrders.length > 0 && attempts < maxAttempts) {
+            attempts++;
             uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce))) % challengeableOrders.length;
             uint256 orderId = challengeableOrders[idx];
             nonce++;
 
             if (isOrderExpired(orderId)) {
-                _removeFromChallengeableOrders(orderId);
-                evictions++;
+                if (evictions < MAX_CHALLENGE_EVICTIONS) {
+                    _removeFromChallengeableOrders(orderId);
+                    evictions++;
+                }
                 continue;
             }
-
-            probes++;
 
             // Duplicate check (selection count is small, O(found) scan is fine)
             bool dup = false;
@@ -285,6 +284,47 @@ abstract contract MarketOrders is MarketAdmin {
 
             result[found] = orderId;
             found++;
+        }
+
+        // Deterministic fallback scan reduces challenge-blackout risk when random
+        // sampling misses sparse live entries behind an expired backlog.
+        if (found < _desiredCount && challengeableOrders.length > 0) {
+            uint256 checks = 0;
+            uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce, challengeableOrders.length)))
+                % challengeableOrders.length;
+
+            while (found < _desiredCount && challengeableOrders.length > 0 && checks < MAX_CHALLENGE_SELECTION_PROBES) {
+                checks++;
+
+                if (idx >= challengeableOrders.length) {
+                    idx = 0;
+                }
+
+                uint256 orderId = challengeableOrders[idx];
+                if (isOrderExpired(orderId)) {
+                    if (evictions < MAX_CHALLENGE_EVICTIONS) {
+                        _removeFromChallengeableOrders(orderId);
+                        evictions++;
+                        continue;
+                    }
+                    idx++;
+                    continue;
+                }
+
+                bool dup = false;
+                for (uint256 j = 0; j < found; j++) {
+                    if (result[j] == orderId) {
+                        dup = true;
+                        break;
+                    }
+                }
+
+                if (!dup) {
+                    result[found] = orderId;
+                    found++;
+                }
+                idx++;
+            }
         }
 
         assembly {
