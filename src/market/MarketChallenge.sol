@@ -426,8 +426,19 @@ abstract contract MarketChallenge is MarketAccounting {
                 uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % SNARK_SCALAR_FIELD;
         }
 
+        // If this call settles an unresolved primary failure, rotate randomness so
+        // the next challenge cannot reuse the stale failed-round seed.
+        bool hadUnresolvedPrimary =
+            challengeInitialized && !primaryProofReceived && !primaryFailureReported && currentPrimaryProver != address(0);
+
         // Process any pending slashes from the expired challenge before resetting state
         _processExpiredChallengeSlashes(msg.sender);
+
+        if (hadUnresolvedPrimary) {
+            currentRandomness =
+                uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)))
+                    % SNARK_SCALAR_FIELD;
+        }
 
         _triggerNewHeartbeat();
     }

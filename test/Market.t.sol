@@ -670,6 +670,7 @@ contract MarketTest is Test {
         // Initial heartbeat sets up challenge
         vm.warp(block.timestamp + 31);
         market.triggerHeartbeat();
+        uint256 randomnessBeforeFailure = market.currentRandomness();
 
         address primaryProver = market.currentPrimaryProver();
         require(primaryProver != address(0), "need primary for test");
@@ -681,10 +682,13 @@ contract MarketTest is Test {
 
         // Only call triggerHeartbeat — NOT reportPrimaryFailure
         market.triggerHeartbeat();
+        uint256 randomnessAfterFailure = market.currentRandomness();
 
         // Primary prover should have been auto-slashed
         (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(primaryProver);
         assertTrue(stakeAfter < stakeBefore, "primary prover auto-slashed by triggerHeartbeat");
+        assertTrue(randomnessAfterFailure != randomnessBeforeFailure, "randomness should rotate after auto failure");
+        assertTrue(randomnessAfterFailure < SNARK_SCALAR_FIELD, "rotated randomness must stay in field");
 
         (uint256 totalReceived,,,) = market.getSlashRedistributionStats();
         assertTrue(totalReceived > 0, "slash funds distributed");
