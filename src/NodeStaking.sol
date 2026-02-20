@@ -75,7 +75,8 @@ contract NodeStaking {
     function stakeNode(uint64 _capacity, uint256 _publicKeyX, uint256 _publicKeyY) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
         require(
-            _publicKeyX != 0 && _publicKeyX < SNARK_SCALAR_FIELD && _publicKeyY != 0 && _publicKeyY < SNARK_SCALAR_FIELD,
+            _publicKeyX != 0 && _publicKeyX < SNARK_SCALAR_FIELD && _publicKeyY != 0
+                && _publicKeyY < SNARK_SCALAR_FIELD,
             "public key not in field"
         );
 

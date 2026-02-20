@@ -21,7 +21,7 @@ abstract contract MarketTestBase is Test {
     uint64 internal constant TEST_CAPACITY = 1024;
     uint256 internal constant STAKE_PER_BYTE = 10 ** 14;
     uint256 internal constant PERIOD = 7 days;
-    uint256 internal constant STEP = 30 seconds;
+    uint256 internal constant CHALLENGE_WINDOW_BLOCKS = 50;
 
     uint256 internal constant FILE_ROOT = 0x123456789abcdef;
     string internal constant FILE_URI = "QmTestHash123";
@@ -65,17 +65,21 @@ abstract contract MarketTestBase is Test {
         return _placeOrder(owner_, 1024, 4, replicas, 1e12);
     }
 
-    function _bootstrapSingleOrderChallenge() internal returns (uint256 orderId, address primaryProver) {
+    /// @notice Bootstrap a single slot challenge: stake node, place order, execute, activate slots.
+    /// Returns the orderId and the challenged node address from slot 0.
+    function _bootstrapSingleSlotChallenge() internal returns (uint256 orderId, address challengedNode) {
         _stakeDefaultNode(node1, 0x1234, 0x5678);
         (orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        vm.warp(block.timestamp + STEP + 1);
-        market.triggerHeartbeat();
+        market.activateSlots();
 
-        (,, primaryProver,,,,) = market.getCurrentChallengeInfo();
+        // Read slot 0 to get the challenged node
+        (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(0);
+        require(slotOrderId != 0, "slot not activated");
+        challengedNode = slotNode;
     }
 }
 
@@ -86,13 +90,9 @@ contract BaseRevertingReceiver {
         market = _market;
     }
 
-    function placeOrderWithOverpayment(
-        uint64 maxSize,
-        uint16 periods,
-        uint8 replicas,
-        uint256 price,
-        uint256 overpay
-    ) external {
+    function placeOrderWithOverpayment(uint64 maxSize, uint16 periods, uint8 replicas, uint256 price, uint256 overpay)
+        external
+    {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: 0x123, uri: "test"});
         market.placeOrder{value: totalCost + overpay}(meta, maxSize, periods, replicas, price);

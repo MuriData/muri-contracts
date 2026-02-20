@@ -3,384 +3,215 @@ pragma solidity ^0.8.13;
 
 import {MarketAccounting} from "./MarketAccounting.sol";
 
-/// @notice Rolling challenge, proof submission, and heartbeat orchestration.
+/// @notice Event-driven parallel challenge slots for Avalanche C-Chain.
+/// N independent challenge slots run in parallel. Each slot challenges one node
+/// to prove one order. Expired slots are slashed as a side effect of any submitProof call.
 abstract contract MarketChallenge is MarketAccounting {
-    /// @notice Submit proof for current challenge
-    function submitProof(uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
-        require(currentStep() > lastChallengeStep, "no active challenge");
-        require(currentStep() <= lastChallengeStep + 1, "challenge period expired");
+    /// @notice Submit proof for a specific challenge slot — the ONLY function nodes call.
+    /// Phase 1: sweep expired slots (slash lazy nodes).
+    /// Phase 2: validate caller is the challenged node for this slot.
+    /// Phase 3: verify ZK proof.
+    /// Phase 4: advance slot to next challenge.
+    function submitProof(uint256 _slotIndex, uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
+        require(_slotIndex < NUM_CHALLENGE_SLOTS, "invalid slot index");
 
-        bool isPrimary = (msg.sender == currentPrimaryProver);
-        bool isSecondary = false;
+        // Phase 1: sweep expired slots — slashes expired nodes, earns reporter rewards for caller
+        _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL);
 
-        // Check if sender is a secondary prover
-        for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-            if (currentSecondaryProvers[i] == msg.sender) {
-                isSecondary = true;
-                break;
-            }
-        }
+        // Phase 2: validate this slot is active and caller is the challenged node
+        ChallengeSlot storage slot = challengeSlots[_slotIndex];
+        require(slot.orderId != 0, "slot is idle");
+        require(slot.challengedNode == msg.sender, "not the challenged node");
+        require(block.number <= slot.deadlineBlock, "slot deadline passed");
 
-        require(isPrimary || isSecondary, "not a challenged prover");
-        require(!proofSubmitted[msg.sender], "proof already submitted");
-
-        // Get the order this node should prove (set during challenge assignment)
-        uint256 proverOrderId = nodeToProveOrderId[msg.sender];
-        require(proverOrderId != 0, "no order assigned to node");
-
-        // Get file root hash from the order
-        FileOrder storage order = orders[proverOrderId];
+        // Phase 3: verify ZK proof
+        FileOrder storage order = orders[slot.orderId];
         uint256 fileRootHash = order.file.root;
 
-        // Get node's public key from NodeStaking contract
         (,,, uint256 publicKeyX, uint256 publicKeyY) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKeyX != 0 && publicKeyY != 0, "node public key not set");
 
-        // Prepare public inputs for POI verifier matching gnark circuit field order:
-        // [commitment, randomness, publicKeyX, publicKeyY, rootHash]
-        uint256[5] memory publicInputs = [uint256(_commitment), currentRandomness, publicKeyX, publicKeyY, fileRootHash];
+        uint256[5] memory publicInputs = [uint256(_commitment), slot.randomness, publicKeyX, publicKeyY, fileRootHash];
 
-        // Verify proof using POI verifier - reverts on invalid proof
         poiVerifier.verifyProof(_proof, publicInputs);
 
-        proofSubmitted[msg.sender] = true;
+        emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
-        if (isPrimary) {
-            primaryProofReceived = true;
-            // Defer commitment as next round's randomness seed so that
-            // currentRandomness stays valid for secondary proof verification
-            // during the remainder of this step.
-            pendingRandomness = uint256(_commitment);
-        }
-
-        emit ProofSubmitted(msg.sender, isPrimary, _commitment);
+        // Phase 4: advance slot using commitment-derived randomness
+        uint256 newRandomness = uint256(_commitment) % SNARK_SCALAR_FIELD;
+        _advanceSlot(_slotIndex, newRandomness);
     }
 
-    /// @notice Report primary prover failure (callable after STEP period)
-    function reportPrimaryFailure() external nonReentrant {
-        require(nodeStaking.isValidNode(msg.sender), "not a valid node");
-        require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
-        require(!primaryProofReceived, "primary proof was submitted");
-        require(!primaryFailureReported, "primary failure already reported");
-        require(currentPrimaryProver != address(0), "no primary assigned");
-
-        // Mark failure as reported to prevent duplicate reports
-        primaryFailureReported = true;
-
-        // Slash primary prover severely (skip if already invalidated by authority slash)
-        address primaryProver = currentPrimaryProver;
-        require(nodeToProveOrderId[primaryProver] != 0, "primary not assigned to order");
-
-        if (nodeStaking.isValidNode(primaryProver)) {
-            uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE(); // Much higher than normal
-
-            // Cap to available stake to prevent revert
-            (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
-            if (severeSlashAmount > nodeStake) {
-                severeSlashAmount = nodeStake;
-            }
-
-            if (severeSlashAmount > 0) {
-                (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
-                _distributeSlashFunds(msg.sender, primaryProver, totalSlashed);
-                if (forcedExit) {
-                    _handleForcedOrderExits(primaryProver);
-                }
-                emit NodeSlashed(primaryProver, severeSlashAmount, "failed primary proof");
-            }
-        }
-
-        // Generate fallback randomness using reporter's signature and block data
-        uint256 fallbackRandomness =
-            uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)));
-
-        currentRandomness = fallbackRandomness % SNARK_SCALAR_FIELD;
-
-        // Auto-slash secondaries before resetting state (primary already slashed above)
-        _processExpiredChallengeSlashes(msg.sender);
-
-        _triggerNewHeartbeat();
-
-        emit PrimaryProverFailed(primaryProver, msg.sender, fallbackRandomness);
+    /// @notice Maintenance function: anyone can call to slash expired slots and earn reporter rewards.
+    /// Needed when no nodes are submitting proofs (dead network scenario).
+    function processExpiredSlots() external nonReentrant {
+        uint256 processed = _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL);
+        require(processed > 0, "no expired slots");
+        emit ExpiredSlotsProcessed(processed, msg.sender);
     }
 
-    /// @notice Check and slash secondary provers who failed to submit proofs
-    function slashSecondaryFailures() external nonReentrant {
-        require(currentStep() > lastChallengeStep + 1, "challenge period not expired");
-        require(!secondarySlashProcessed, "secondary slash settled");
-        secondarySlashProcessed = true;
-
-        for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-            address secondaryProver = currentSecondaryProvers[i];
-            if (!proofSubmitted[secondaryProver]) {
-                // Ensure still assigned to an order for this challenge
-                if (nodeToProveOrderId[secondaryProver] == 0) {
-                    continue;
-                }
-                if (!nodeStaking.isValidNode(secondaryProver)) {
-                    continue;
-                }
-                // Normal slashing for secondary provers
-                uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
-
-                // Cap to available stake to prevent revert
-                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(secondaryProver);
-                if (normalSlashAmount > nodeStake) {
-                    normalSlashAmount = nodeStake;
-                }
-
-                if (normalSlashAmount > 0) {
-                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(secondaryProver, normalSlashAmount);
-                    _distributeSlashFunds(msg.sender, secondaryProver, totalSlashed);
-                    if (forcedExit) {
-                        _handleForcedOrderExits(secondaryProver);
-                    }
-                    emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
-                }
-                proofSubmitted[secondaryProver] = true;
-            }
+    /// @notice Bootstrap or refill idle challenge slots with challengeable orders.
+    /// Anyone can call. First call initializes globalSeedRandomness.
+    function activateSlots() external nonReentrant {
+        // Bootstrap randomness on first call
+        if (!challengeSlotsInitialized) {
+            globalSeedRandomness = uint256(
+                keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender, block.number))
+            ) % SNARK_SCALAR_FIELD;
+            challengeSlotsInitialized = true;
         }
-    }
 
-    /// @notice Trigger new heartbeat with challenge selection
-    function _triggerNewHeartbeat() internal {
-        // Clean up expired orders before selecting challenges so stale orders
-        // are evicted from challengeableOrders regardless of the calling path
-        // (triggerHeartbeat or reportPrimaryFailure).
+        // Clean up expired orders before filling slots
         _cleanupExpiredOrders();
 
-        // Apply deferred randomness from primary proof if available
-        if (pendingRandomness != 0) {
-            currentRandomness = pendingRandomness;
-            pendingRandomness = 0;
-        }
+        uint256 activated = 0;
+        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+            if (challengeSlots[i].orderId != 0) continue; // slot already active
 
-        uint256 currentStep_ = currentStep();
-        challengeInitialized = true;
-
-        // Reset proof tracking
-        _resetProofTracking();
-
-        // Determine desired number of secondary provers using alpha * log2(total orders)
-        uint256 totalOrders = nextOrderId - 1;
-        uint256 desiredSecondaryCount = SECONDARY_ALPHA * _log2(totalOrders);
-        uint256 selectionCount = desiredSecondaryCount + 1; // +1 for primary order
-        if (selectionCount == 0) {
-            selectionCount = 1; // ensure we request at least one order
-        }
-
-        // Select random non-expired orders for challenge, evicting expired entries on contact
-        uint256[] memory selectedOrders = _selectChallengeableOrders(currentRandomness, selectionCount);
-
-        if (selectedOrders.length == 0) {
-            // Clear stale challenge state so _isOrderUnderActiveChallenge() doesn't
-            // match orders from a previous heartbeat.
-            delete currentChallengedOrders;
-            currentPrimaryProver = address(0);
-            // Secondary prover mappings already cleared by _resetProofTracking();
-            // zero out the array itself.
-            assembly {
-                sstore(currentSecondaryProvers.slot, 0)
-            }
-
-            // Advance randomness even without challengeable orders to keep the beacon moving
-            currentRandomness = uint256(
-                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
+            // Derive per-slot randomness from global seed
+            uint256 slotRandomness = uint256(
+                keccak256(abi.encodePacked(globalSeedRandomness, i, block.number, block.prevrandao))
             ) % SNARK_SCALAR_FIELD;
-            lastChallengeStep = currentStep_;
-            emit HeartbeatTriggered(currentRandomness, currentStep_);
-            return;
+
+            if (_advanceSlot(i, slotRandomness)) {
+                activated++;
+            }
         }
 
-        // Set up new challenge
-        currentChallengedOrders = selectedOrders;
+        require(activated > 0, "no slots activated");
 
-        // Select a primary prover: choose a random node from the first order that has at least one node
-        address primary;
-        uint256 primaryOrderId;
-        for (uint256 idx = 0; idx < selectedOrders.length; idx++) {
-            uint256 candidateOrderId = selectedOrders[idx];
-            address[] storage candidateNodes = orderToNodes[candidateOrderId];
-            if (candidateNodes.length == 0) {
+        // Rotate global seed
+        globalSeedRandomness = uint256(
+            keccak256(abi.encodePacked(globalSeedRandomness, block.number, block.prevrandao, msg.sender))
+        ) % SNARK_SCALAR_FIELD;
+
+        emit SlotsActivated(activated);
+    }
+
+    /// @notice Advance a slot to challenge a new random order/node.
+    /// @return success True if a valid order+node was found and the slot was activated.
+    function _advanceSlot(uint256 _slotIndex, uint256 _randomness) internal returns (bool success) {
+        ChallengeSlot storage slot = challengeSlots[_slotIndex];
+
+        // Decrement old counters if slot was active
+        if (slot.orderId != 0) {
+            nodeActiveChallengeCount[slot.challengedNode]--;
+            orderActiveChallengeCount[slot.orderId]--;
+        }
+
+        // Random-probe challengeableOrders[] to find a valid order
+        uint256 len = challengeableOrders.length;
+        if (len == 0) {
+            _deactivateSlot(_slotIndex);
+            return false;
+        }
+
+        uint256 nonce = 0;
+        uint256 probes = 0;
+        uint256 evictions = 0;
+
+        while (probes < MAX_CHALLENGE_SELECTION_PROBES && len > 0) {
+            uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, nonce))) % len;
+            uint256 candidateOrderId = challengeableOrders[idx];
+            nonce++;
+            probes++;
+
+            // Inline eviction of expired orders
+            if (isOrderExpired(candidateOrderId)) {
+                if (evictions < MAX_CHALLENGE_EVICTIONS) {
+                    _removeFromChallengeableOrders(candidateOrderId);
+                    evictions++;
+                    len = challengeableOrders.length;
+                }
                 continue;
             }
-            uint256 r = uint256(keccak256(abi.encodePacked(currentRandomness, candidateOrderId, idx)));
-            primary = candidateNodes[r % candidateNodes.length];
-            primaryOrderId = candidateOrderId;
-            break;
+
+            // Found a valid order — select a random node from it
+            address[] storage nodes = orderToNodes[candidateOrderId];
+            if (nodes.length == 0) continue;
+
+            uint256 nodeIdx = uint256(keccak256(abi.encodePacked(_randomness, candidateOrderId, nonce))) % nodes.length;
+            address selectedNode = nodes[nodeIdx];
+
+            // Set slot state
+            slot.orderId = candidateOrderId;
+            slot.challengedNode = selectedNode;
+            slot.randomness = _randomness;
+            slot.deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS;
+
+            // Increment counters
+            nodeActiveChallengeCount[selectedNode]++;
+            orderActiveChallengeCount[candidateOrderId]++;
+
+            emit SlotChallengeIssued(_slotIndex, candidateOrderId, selectedNode, slot.deadlineBlock);
+            return true;
         }
 
-        // If no orders had nodes, clear provers, advance randomness, emit heartbeat and exit
-        if (primary == address(0)) {
-            // Clear any stale provers
-            if (currentPrimaryProver != address(0)) {
-                proofSubmitted[currentPrimaryProver] = false;
-                nodeToProveOrderId[currentPrimaryProver] = 0;
-            }
-            if (currentSecondaryProvers.length > 0) {
-                for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-                    address s = currentSecondaryProvers[i];
-                    proofSubmitted[s] = false;
-                    nodeToProveOrderId[s] = 0;
-                }
-                assembly {
-                    sstore(currentSecondaryProvers.slot, 0)
-                }
-            }
-            currentPrimaryProver = address(0);
+        // No valid orders found — deactivate slot
+        _deactivateSlot(_slotIndex);
+        return false;
+    }
 
-            // Advance randomness even without a selection to keep the beacon moving
-            currentRandomness = uint256(
-                keccak256(abi.encodePacked(currentRandomness, block.timestamp, block.prevrandao, msg.sender))
+    /// @notice Deactivate a slot (set orderId = 0)
+    function _deactivateSlot(uint256 _slotIndex) internal {
+        ChallengeSlot storage slot = challengeSlots[_slotIndex];
+        slot.orderId = 0;
+        slot.challengedNode = address(0);
+        slot.randomness = 0;
+        slot.deadlineBlock = 0;
+        emit SlotDeactivated(_slotIndex);
+    }
+
+    /// @notice Sweep expired slots: slash failed nodes, advance or deactivate.
+    /// @return processed Number of expired slots processed.
+    function _sweepExpiredSlots(address _reporter, uint256 _maxSweep) internal returns (uint256 processed) {
+        uint256 forcedExitCount = 0;
+
+        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS && processed < _maxSweep; i++) {
+            ChallengeSlot storage slot = challengeSlots[i];
+
+            // Skip idle or non-expired slots
+            if (slot.orderId == 0) continue;
+            if (block.number <= slot.deadlineBlock) continue;
+
+            address failedNode = slot.challengedNode;
+
+            // Slash the failed node
+            uint256 slashAmount = PROOF_FAILURE_SLASH_BYTES * nodeStaking.STAKE_PER_BYTE();
+
+            if (nodeStaking.isValidNode(failedNode)) {
+                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(failedNode);
+                if (slashAmount > nodeStake) {
+                    slashAmount = nodeStake;
+                }
+
+                if (slashAmount > 0) {
+                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(failedNode, slashAmount);
+                    _distributeSlashFunds(_reporter, failedNode, totalSlashed);
+                    if (forcedExit && forcedExitCount < MAX_FORCED_EXITS_PER_SWEEP) {
+                        _handleForcedOrderExits(failedNode);
+                        forcedExitCount++;
+                    }
+                    emit NodeSlashed(failedNode, slashAmount, "failed challenge proof");
+                }
+            }
+
+            emit SlotExpired(i, failedNode, slashAmount);
+
+            // Advance slot with fallback randomness
+            uint256 fallbackRandomness = uint256(
+                keccak256(abi.encodePacked(slot.randomness, block.number, block.prevrandao, _reporter, i))
             ) % SNARK_SCALAR_FIELD;
-            lastChallengeStep = currentStep_;
-            emit HeartbeatTriggered(currentRandomness, currentStep_);
-            return;
-        }
 
-        currentPrimaryProver = primary;
-        nodeToProveOrderId[currentPrimaryProver] = primaryOrderId;
+            _advanceSlot(i, fallbackRandomness);
 
-        // Reset secondary provers array length to 0 (more efficient than delete)
-        uint256 secondaryCount = 0;
-        if (currentSecondaryProvers.length > 0) {
-            assembly {
-                sstore(currentSecondaryProvers.slot, 0)
-            }
-        }
+            processed++;
 
-        // Assign secondary provers from remaining orders, selecting a random node per order
-        for (uint256 i = 0; i < selectedOrders.length; i++) {
-            uint256 orderId = selectedOrders[i];
-            if (orderId == primaryOrderId) {
-                continue;
-            }
-            address[] storage orderNodes = orderToNodes[orderId];
-            if (orderNodes.length > 0) {
-                uint256 r = uint256(keccak256(abi.encodePacked(currentRandomness, orderId, i)));
-                address secondaryNode = orderNodes[r % orderNodes.length];
-                // Skip if this node is already the primary prover
-                if (secondaryNode == primary) {
-                    continue;
-                }
-                // Skip if this node was already assigned (primary or earlier secondary)
-                if (nodeToProveOrderId[secondaryNode] != 0) {
-                    continue;
-                }
-                currentSecondaryProvers.push(secondaryNode);
-                nodeToProveOrderId[secondaryNode] = orderId;
-                secondaryCount++;
-                if (secondaryCount >= desiredSecondaryCount) {
-                    break;
-                }
-            }
-        }
-
-        lastChallengeStep = currentStep_;
-
-        emit ChallengeIssued(
-            currentRandomness, currentPrimaryProver, currentSecondaryProvers, selectedOrders, currentStep_
-        );
-        emit HeartbeatTriggered(currentRandomness, currentStep_);
-    }
-
-    // Compute floor(log2(value)); returns 0 for value == 0 or 1
-    function _log2(uint256 value) internal pure returns (uint256 result) {
-        if (value <= 1) {
-            return 0;
-        }
-        while (value > 1) {
-            value >>= 1;
-            result++;
-        }
-    }
-
-    /// @notice Reset proof submission tracking for new challenge
-    function _resetProofTracking() internal {
-        // Reset primary prover proof status
-        primaryProofReceived = false;
-        primaryFailureReported = false;
-        secondarySlashProcessed = false;
-
-        // Reset primary prover submission and order assignment
-        if (currentPrimaryProver != address(0)) {
-            proofSubmitted[currentPrimaryProver] = false;
-            nodeToProveOrderId[currentPrimaryProver] = 0;
-        }
-
-        // Reset secondary provers submissions and order assignments
-        for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-            address secondaryNode = currentSecondaryProvers[i];
-            proofSubmitted[secondaryNode] = false;
-            nodeToProveOrderId[secondaryNode] = 0;
-        }
-    }
-
-    /// @notice Auto-process all pending slashes for an expired challenge before state reset.
-    /// @param _reporter Address that triggered processing (receives reporter rewards)
-    function _processExpiredChallengeSlashes(address _reporter) internal {
-        if (!challengeInitialized) return;
-
-        // --- Primary prover slash ---
-        if (!primaryProofReceived && !primaryFailureReported && currentPrimaryProver != address(0)) {
-            address primaryProver = currentPrimaryProver;
-            if (nodeToProveOrderId[primaryProver] != 0 && nodeStaking.isValidNode(primaryProver)) {
-                primaryFailureReported = true;
-                uint256 severeSlashAmount = 1000 * nodeStaking.STAKE_PER_BYTE();
-
-                // Cap to available stake to prevent revert
-                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(primaryProver);
-                if (severeSlashAmount > nodeStake) {
-                    severeSlashAmount = nodeStake;
-                }
-
-                if (severeSlashAmount > 0) {
-                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(primaryProver, severeSlashAmount);
-                    _distributeSlashFunds(_reporter, primaryProver, totalSlashed);
-                    if (forcedExit) {
-                        _handleForcedOrderExits(primaryProver);
-                    }
-                    emit NodeSlashed(primaryProver, severeSlashAmount, "failed primary proof (auto)");
-                }
-            }
-        }
-
-        // --- Secondary prover slashes ---
-        if (!secondarySlashProcessed) {
-            secondarySlashProcessed = true;
-
-            for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-                address secondaryProver = currentSecondaryProvers[i];
-                if (!proofSubmitted[secondaryProver] && nodeToProveOrderId[secondaryProver] != 0) {
-                    if (!nodeStaking.isValidNode(secondaryProver)) {
-                        continue;
-                    }
-                    uint256 normalSlashAmount = 100 * nodeStaking.STAKE_PER_BYTE();
-
-                    (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(secondaryProver);
-                    if (normalSlashAmount > nodeStake) {
-                        normalSlashAmount = nodeStake;
-                    }
-
-                    if (normalSlashAmount > 0) {
-                        (bool forcedExit, uint256 totalSlashed) =
-                            nodeStaking.slashNode(secondaryProver, normalSlashAmount);
-                        _distributeSlashFunds(_reporter, secondaryProver, totalSlashed);
-                        if (forcedExit) {
-                            _handleForcedOrderExits(secondaryProver);
-                        }
-                        emit NodeSlashed(secondaryProver, normalSlashAmount, "failed secondary proof");
-                    }
-                    proofSubmitted[secondaryProver] = true;
-                }
-            }
+            if (forcedExitCount >= MAX_FORCED_EXITS_PER_SWEEP) break;
         }
     }
 
     /// @notice Cleanup expired orders automatically using a persistent cursor.
-    /// Scans at most CLEANUP_SCAN_CAP entries per call, processing up to batchSize expired orders.
-    /// The cursor persists across heartbeats so each call resumes where the last left off,
-    /// amortising full-array scans across multiple heartbeats.
     function _cleanupExpiredOrders() internal {
         uint256 len = activeOrders.length;
         if (len == 0) {
@@ -402,7 +233,6 @@ abstract contract MarketChallenge is MarketAccounting {
             if (isOrderExpired(activeOrderId)) {
                 _completeExpiredOrderInternal(activeOrderId);
                 processed++;
-                // swap-and-pop: re-check position i (new element swapped in)
                 len = activeOrders.length;
                 if (len == 0) break;
                 if (i >= len) i = 0;
@@ -416,47 +246,18 @@ abstract contract MarketChallenge is MarketAccounting {
         cleanupCursor = (len == 0) ? 0 : i;
     }
 
-    /// @notice Manual heartbeat trigger (can be called by anyone if no challenge active)
-    function triggerHeartbeat() external nonReentrant {
-        require(currentStep() > lastChallengeStep + 1 || !challengeInitialized, "challenge still active");
-
-        // If no randomness set, initialize with block data
-        if (currentRandomness == 0) {
-            currentRandomness =
-                uint256(keccak256(abi.encodePacked(block.timestamp, block.prevrandao, msg.sender))) % SNARK_SCALAR_FIELD;
-        }
-
-        // If this call settles an unresolved primary failure, rotate randomness so
-        // the next challenge cannot reuse the stale failed-round seed.
-        bool hadUnresolvedPrimary =
-            challengeInitialized && !primaryProofReceived && !primaryFailureReported && currentPrimaryProver != address(0);
-
-        // Process any pending slashes from the expired challenge before resetting state
-        _processExpiredChallengeSlashes(msg.sender);
-
-        if (hadUnresolvedPrimary) {
-            currentRandomness =
-                uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.prevrandao, currentRandomness)))
-                    % SNARK_SCALAR_FIELD;
-        }
-
-        _triggerNewHeartbeat();
-    }
-
-    /// @notice Internal version of completeExpiredOrder for heartbeat use
+    /// @notice Internal version of completeExpiredOrder for cleanup use
     function _completeExpiredOrderInternal(uint256 _orderId) internal {
         FileOrder storage order = orders[_orderId];
-        if (order.owner == address(0)) return; // Already completed
+        if (order.owner == address(0)) return;
 
         uint256 settlePeriod = order.startPeriod + order.periods;
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
-        // Remove from active orders and clean up
         _removeFromActiveOrders(_orderId);
         uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
         address orderOwner = order.owner;
 
-        // Update aggregates before delete zeroes the struct
         aggregateActiveEscrow -= order.escrow;
         aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
 

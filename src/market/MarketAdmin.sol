@@ -23,8 +23,4 @@ abstract contract MarketAdmin is MarketStorage {
     function currentEpoch() public view returns (uint256) {
         return (block.timestamp - GENESIS_TS) / EPOCH;
     }
-
-    function currentStep() public view returns (uint256) {
-        return (block.timestamp - GENESIS_TS) / STEP;
-    }
 }

@@ -8,7 +8,6 @@ import {NodeStaking} from "../NodeStaking.sol";
 abstract contract MarketStorage {
     uint256 internal constant PERIOD = 7 days; // single billing unit
     uint256 internal constant EPOCH = 4 * PERIOD;
-    uint256 internal constant STEP = 30 seconds; // proof submission period
     uint256 internal constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
     uint256 internal constant MAX_ORDERS_PER_NODE = 50; // cap orders per node to bound forced-exit iteration
     uint8 internal constant MAX_REPLICAS = 10; // cap replicas per order to bound settlement loop gas
@@ -36,6 +35,14 @@ abstract contract MarketStorage {
         uint8 filled; // replica slots already taken
         uint64 startPeriod; // when storage begins
         uint256 escrow; // prepaid funds held in contract
+    }
+
+    // --- Challenge slot struct for parallel event-driven challenges ---
+    struct ChallengeSlot {
+        uint256 orderId; // order being challenged (0 = idle)
+        address challengedNode; // node that must submit proof
+        uint256 randomness; // per-slot randomness for proof verification
+        uint256 deadlineBlock; // block.number deadline
     }
 
     // Staking contract for managing node stakes and capacity
@@ -78,43 +85,34 @@ abstract contract MarketStorage {
     uint256 public totalBurnedFromSlash;
     uint256 public totalReporterRewards;
 
-    // Proof system - stateless rolling challenges
-    uint256 public currentRandomness; // current heartbeat randomness
-    uint256 public lastChallengeStep; // last step when challenge was issued
-    address public currentPrimaryProver; // current primary prover
-    address[] public currentSecondaryProvers; // current secondary provers
-    uint256[] public currentChallengedOrders; // current orders being challenged
-    uint256 public constant CHALLENGE_COUNT = 5; // orders to challenge per heartbeat
-    uint256 public constant SECONDARY_ALPHA = 2; // alpha multiplier for secondary provers
+    // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
+    uint256 public constant NUM_CHALLENGE_SLOTS = 5;
+    uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
+    uint256 public constant PROOF_FAILURE_SLASH_BYTES = 500; // uniform slash amount in bytes
+    uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
+    uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
-    // Proof submission tracking (reset each heartbeat)
-    mapping(address => bool) public proofSubmitted; // current round proof submissions
-    mapping(address => uint256) public nodeToProveOrderId; // node -> order they're proving (current challenge)
-    bool public primaryProofReceived; // primary proof received for current challenge
-    bool public primaryFailureReported; // primary failure already reported for current step
-    bool public secondarySlashProcessed; // secondary slashing already handled for current challenge
+    ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
+    bool public challengeSlotsInitialized;
+    uint256 public globalSeedRandomness; // rolling seed for bootstrapping slot randomness
+    mapping(address => uint256) public nodeActiveChallengeCount; // O(1) prover check
+    mapping(uint256 => uint256) public orderActiveChallengeCount; // O(1) order-under-challenge check
 
     // Cleanup cursor for amortised expired-order scanning
     uint256 public cleanupCursor;
 
-    // Cancellation penalty tracking (placed after proof system to preserve storage layout)
+    // Cancellation penalty tracking
     uint256 public totalCancellationPenalties; // total early-cancellation penalties distributed to nodes
 
-    // Pull-payment refunds (placed after totalCancellationPenalties to preserve storage layout)
+    // Pull-payment refunds
     mapping(address => uint256) public pendingRefunds;
 
-    // Challenge initialization flag (placed at end to preserve storage layout)
-    bool public challengeInitialized; // true after the first heartbeat has been issued
-
-    // Deferred randomness from primary proof submission (applied at next heartbeat start)
-    uint256 public pendingRandomness;
-
-    // Incremental escrow aggregates for O(1) stats (placed at end to preserve storage layout)
+    // Incremental escrow aggregates for O(1) stats
     uint256 public aggregateActiveEscrow; // sum of order.escrow for all non-deleted orders
     uint256 public aggregateActiveWithdrawn; // sum of orderEscrowWithdrawn for all non-deleted orders
 
-    // Lifetime monotonic counters for dashboard accuracy (placed at end to preserve storage layout)
+    // Lifetime monotonic counters for dashboard accuracy
     uint256 public lifetimeEscrowDeposited; // cumulative escrow deposited across all orders ever placed
     uint256 public lifetimeRewardsPaid; // cumulative escrow paid to nodes as rewards
 
@@ -130,12 +128,6 @@ abstract contract MarketStorage {
     event ForcedOrderExits(address indexed node, uint256[] orderIds, uint64 totalFreed);
     event RewardsCalculated(address indexed node, uint256 amount, uint256 periods);
     event RewardsClaimed(address indexed node, uint256 amount);
-    event ChallengeIssued(
-        uint256 randomness, address primaryProver, address[] secondaryProvers, uint256[] orderIds, uint256 challengeStep
-    );
-    event ProofSubmitted(address indexed prover, bool isPrimary, bytes32 commitment);
-    event PrimaryProverFailed(address indexed primaryProver, address indexed reporter, uint256 newRandomness);
-    event HeartbeatTriggered(uint256 newRandomness, uint256 step);
     event ReporterRewardAccrued(address indexed reporter, uint256 rewardAmount, uint256 slashedAmount);
     event ReporterRewardsClaimed(address indexed reporter, uint256 amount);
     event ReporterRewardBpsUpdated(uint256 oldBps, uint256 newBps);
@@ -143,6 +135,16 @@ abstract contract MarketStorage {
     event RefundQueued(address indexed recipient, uint256 amount);
     event RefundWithdrawn(address indexed recipient, uint256 amount);
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
+
+    // Challenge slot events
+    event SlotChallengeIssued(
+        uint256 indexed slotIndex, uint256 orderId, address challengedNode, uint256 deadlineBlock
+    );
+    event SlotProofSubmitted(uint256 indexed slotIndex, address indexed prover, bytes32 commitment);
+    event SlotExpired(uint256 indexed slotIndex, address indexed failedNode, uint256 slashAmount);
+    event SlotDeactivated(uint256 indexed slotIndex);
+    event SlotsActivated(uint256 activatedCount);
+    event ExpiredSlotsProcessed(uint256 processedCount, address indexed reporter);
 
     constructor() {
         GENESIS_TS = block.timestamp;

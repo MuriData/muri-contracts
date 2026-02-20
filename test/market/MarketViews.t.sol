@@ -16,9 +16,9 @@ contract MarketViewsTest is MarketTestBase {
             uint256 totalCapacityStaked,
             uint256 totalCapacityUsed,
             uint256 currentRandomnessValue,
-            uint256 lastHeartbeatStep,
+            uint256 activeChallengeSlots,
             uint256 currentPeriod_,
-            uint256 currentStep_,
+            uint256 currentBlock_,
             uint256 challengeableOrdersCount
         ) = market.getGlobalStats();
 
@@ -29,9 +29,9 @@ contract MarketViewsTest is MarketTestBase {
         assertEq(totalCapacityStaked, TEST_CAPACITY);
         assertEq(totalCapacityUsed, 0);
         assertEq(challengeableOrdersCount, 0);
-        assertEq(lastHeartbeatStep, 0);
+        assertEq(activeChallengeSlots, 0);
         assertEq(currentPeriod_, market.currentPeriod());
-        assertEq(currentStep_, market.currentStep());
+        assertEq(currentBlock_, block.number);
         assertEq(currentRandomnessValue, 0);
     }
 
@@ -77,8 +77,15 @@ contract MarketViewsTest is MarketTestBase {
     function test_GetOrderDetails_ReturnsPlacedValues() public {
         (uint256 orderId,) = _placeOrder(user1, 512, 3, 2, 1e12);
 
-        (address owner_, string memory uri_, uint256 root_, uint64 size_, uint16 periods_, uint8 replicas_, uint8 filled_)
-        = market.getOrderDetails(orderId);
+        (
+            address owner_,
+            string memory uri_,
+            uint256 root_,
+            uint64 size_,
+            uint16 periods_,
+            uint8 replicas_,
+            uint8 filled_
+        ) = market.getOrderDetails(orderId);
 
         assertEq(owner_, user1);
         assertEq(uri_, FILE_URI);
@@ -96,7 +103,8 @@ contract MarketViewsTest is MarketTestBase {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        (, uint256 withdrawn, uint64 startPeriod, bool expired, address[] memory nodes) = market.getOrderFinancials(orderId);
+        (, uint256 withdrawn, uint64 startPeriod, bool expired, address[] memory nodes) =
+            market.getOrderFinancials(orderId);
 
         assertEq(withdrawn, 0);
         assertEq(startPeriod, market.currentPeriod());
@@ -123,13 +131,88 @@ contract MarketViewsTest is MarketTestBase {
         assertEq(averageOrderValue, totalCost);
     }
 
-    function test_GetProofSystemStats_ChallengeActiveFlag() public {
-        _bootstrapSingleOrderChallenge();
+    function test_GetProofSystemStats_SlotCounts() public {
+        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        (, uint256 currentStepValue, uint256 lastStep, bool challengeActive, address primary,,,) = market.getProofSystemStats();
+        vm.prank(node1);
+        market.executeOrder(orderId);
 
-        assertTrue(primary != address(0));
-        assertTrue(challengeActive);
-        assertTrue(currentStepValue <= lastStep + 1);
+        market.activateSlots();
+
+        (
+            uint256 activeSlotsCount,
+            uint256 idleSlotsCount,
+            uint256 expiredSlotsCount,
+            uint256 currentBlockNumber,
+            uint256 challengeWindowBlocks,
+            uint256 challengeableOrdersCount
+        ) = market.getProofSystemStats();
+
+        // At least 1 active slot, rest idle (only 1 order so likely 1 active)
+        assertGt(activeSlotsCount, 0);
+        assertEq(expiredSlotsCount, 0);
+        assertEq(currentBlockNumber, block.number);
+        assertEq(challengeWindowBlocks, CHALLENGE_WINDOW_BLOCKS);
+        assertEq(challengeableOrdersCount, 1);
+        assertEq(activeSlotsCount + idleSlotsCount, 5);
+    }
+
+    function test_GetSlotInfo_ReturnsCorrectData() public {
+        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        (uint256 slotOrderId, address slotNode, uint256 randomness, uint256 deadlineBlock, bool isExpired) =
+            market.getSlotInfo(0);
+
+        assertGt(slotOrderId, 0);
+        assertTrue(slotNode != address(0));
+        assertGt(randomness, 0);
+        assertEq(deadlineBlock, block.number + CHALLENGE_WINDOW_BLOCKS);
+        assertFalse(isExpired);
+    }
+
+    function test_GetAllSlotInfo_ReturnsAllSlots() public {
+        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        (
+            uint256[5] memory orderIds,
+            address[5] memory challengedNodes,
+            uint256[5] memory randomnesses,
+            uint256[5] memory deadlineBlocks,
+            bool[5] memory isExpiredArr
+        ) = market.getAllSlotInfo();
+
+        // At least slot 0 should be active
+        assertGt(orderIds[0], 0);
+        assertTrue(challengedNodes[0] != address(0));
+        assertGt(randomnesses[0], 0);
+        assertGt(deadlineBlocks[0], 0);
+        assertFalse(isExpiredArr[0]);
+    }
+
+    function test_GetNodeChallengeStatus_ReflectsActiveChallenge() public {
+        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        assertEq(market.getNodeChallengeStatus(node1), 0);
+
+        market.activateSlots();
+
+        assertGt(market.getNodeChallengeStatus(node1), 0);
     }
 }

@@ -17,37 +17,46 @@ abstract contract MarketViews is MarketChallenge {
         lastClaimPeriod = nodeLastClaimPeriod[_node];
     }
 
-    /// @notice Get current challenge info
-    function getCurrentChallengeInfo()
+    /// @notice Get info for a single challenge slot
+    function getSlotInfo(uint256 _slotIndex)
+        external
+        view
+        returns (uint256 orderId, address challengedNode, uint256 randomness, uint256 deadlineBlock, bool isExpired)
+    {
+        require(_slotIndex < NUM_CHALLENGE_SLOTS, "invalid slot index");
+        ChallengeSlot storage slot = challengeSlots[_slotIndex];
+        orderId = slot.orderId;
+        challengedNode = slot.challengedNode;
+        randomness = slot.randomness;
+        deadlineBlock = slot.deadlineBlock;
+        isExpired = slot.orderId != 0 && block.number > slot.deadlineBlock;
+    }
+
+    /// @notice Get info for all challenge slots
+    function getAllSlotInfo()
         external
         view
         returns (
-            uint256 randomness,
-            uint256 challengeStep,
-            address primaryProver,
-            address[] memory secondaryProvers,
-            uint256[] memory challengedOrders,
-            bool primarySubmitted,
-            bool challengeActive
+            uint256[5] memory orderIds,
+            address[5] memory challengedNodes,
+            uint256[5] memory randomnesses,
+            uint256[5] memory deadlineBlocks,
+            bool[5] memory isExpired
         )
     {
-        randomness = currentRandomness;
-        challengeStep = lastChallengeStep;
-        primaryProver = currentPrimaryProver;
-        secondaryProvers = currentSecondaryProvers;
-        challengedOrders = currentChallengedOrders;
-        primarySubmitted = primaryProofReceived;
-        challengeActive = (currentStep() <= lastChallengeStep + 1) && challengeInitialized;
+        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+            ChallengeSlot storage slot = challengeSlots[i];
+            orderIds[i] = slot.orderId;
+            challengedNodes[i] = slot.challengedNode;
+            randomnesses[i] = slot.randomness;
+            deadlineBlocks[i] = slot.deadlineBlock;
+            isExpired[i] = slot.orderId != 0 && block.number > slot.deadlineBlock;
+        }
     }
 
-    /// @notice Check if a node has submitted proof for current challenge
-    function hasSubmittedProof(address _node) external view returns (bool) {
-        return proofSubmitted[_node];
-    }
-
-    /// @notice Check if challenge period has expired
-    function isChallengeExpired() external view returns (bool) {
-        return currentStep() > lastChallengeStep + 1;
+    /// @notice Get the number of active challenge obligations for a node
+    function getNodeChallengeStatus(address _node) external view returns (uint256 activeChallenges) {
+        return nodeActiveChallengeCount[_node];
     }
 
     /// @notice Get order escrow info
@@ -83,9 +92,9 @@ abstract contract MarketViews is MarketChallenge {
             uint256 totalCapacityStaked,
             uint256 totalCapacityUsed,
             uint256 currentRandomnessValue,
-            uint256 lastHeartbeatStep,
+            uint256 activeChallengeSlots,
             uint256 currentPeriod_,
-            uint256 currentStep_,
+            uint256 currentBlock_,
             uint256 challengeableOrdersCount
         )
     {
@@ -95,13 +104,19 @@ abstract contract MarketViews is MarketChallenge {
 
         totalEscrowLocked = aggregateActiveEscrow - aggregateActiveWithdrawn;
 
-        // Get node network statistics (O(1) via incremental aggregates)
         (totalNodes, totalCapacityStaked, totalCapacityUsed) = nodeStaking.getNetworkStats();
 
-        currentRandomnessValue = currentRandomness;
-        lastHeartbeatStep = lastChallengeStep;
+        currentRandomnessValue = globalSeedRandomness;
+
+        // Count active slots
+        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+            if (challengeSlots[i].orderId != 0) {
+                activeChallengeSlots++;
+            }
+        }
+
         currentPeriod_ = currentPeriod();
-        currentStep_ = currentStep();
+        currentBlock_ = block.number;
     }
 
     /// @notice Get recent order activity for dashboard
@@ -169,24 +184,27 @@ abstract contract MarketViews is MarketChallenge {
         external
         view
         returns (
-            uint256 totalChallengeRounds,
-            uint256 currentStepValue,
-            uint256 lastChallengeStepValue,
-            bool challengeActive,
-            address currentPrimaryProverAddress,
-            uint256 challengedOrdersCount,
-            uint256[] memory currentChallengedOrderIds,
-            address[] memory secondaryProversList
+            uint256 activeSlotsCount,
+            uint256 idleSlotsCount,
+            uint256 expiredSlotsCount,
+            uint256 currentBlockNumber,
+            uint256 challengeWindowBlocks,
+            uint256 challengeableOrdersCount
         )
     {
-        totalChallengeRounds = lastChallengeStep;
-        currentStepValue = currentStep();
-        lastChallengeStepValue = lastChallengeStep;
-        challengeActive = (currentStepValue <= lastChallengeStep + 1) && challengeInitialized;
-        currentPrimaryProverAddress = currentPrimaryProver;
-        challengedOrdersCount = currentChallengedOrders.length;
-        currentChallengedOrderIds = currentChallengedOrders;
-        secondaryProversList = currentSecondaryProvers;
+        currentBlockNumber = block.number;
+        challengeWindowBlocks = CHALLENGE_WINDOW_BLOCKS;
+        challengeableOrdersCount = challengeableOrders.length;
+
+        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+            if (challengeSlots[i].orderId == 0) {
+                idleSlotsCount++;
+            } else if (block.number > challengeSlots[i].deadlineBlock) {
+                expiredSlotsCount++;
+            } else {
+                activeSlotsCount++;
+            }
+        }
     }
 
     /// @notice Get financial overview for the marketplace

@@ -137,45 +137,19 @@ abstract contract MarketOrders is MarketAdmin {
         isChallengeable[_orderId] = false;
     }
 
-    /// @notice Check if a node has an unresolved proof obligation from the current challenge.
-    /// Returns true if the node is a primary or secondary prover that hasn't submitted proof
-    /// and hasn't been slashed yet. Used to prevent provers from escaping slashing by quitting.
     /// @notice Check if a node has an unresolved proof obligation (used by NodeStaking to block withdrawals)
     function hasUnresolvedProofObligation(address _node) external view returns (bool) {
         return _isUnresolvedProver(_node);
     }
 
+    /// @notice O(1) check: node has active challenge slot(s)
     function _isUnresolvedProver(address _node) internal view returns (bool) {
-        if (!challengeInitialized) return false;
-
-        // Primary prover with unresolved obligation
-        if (_node == currentPrimaryProver && !proofSubmitted[_node] && !primaryFailureReported) {
-            return true;
-        }
-
-        // Secondary prover with unresolved obligation
-        if (!secondarySlashProcessed && !proofSubmitted[_node]) {
-            for (uint256 i = 0; i < currentSecondaryProvers.length; i++) {
-                if (currentSecondaryProvers[i] == _node) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return nodeActiveChallengeCount[_node] > 0;
     }
 
-    /// @notice Check if an order is currently under active challenge
+    /// @notice O(1) check: order is currently under active challenge
     function _isOrderUnderActiveChallenge(uint256 _orderId) internal view returns (bool) {
-        if (!challengeInitialized || currentStep() > lastChallengeStep + 1) {
-            return false;
-        }
-        for (uint256 i = 0; i < currentChallengedOrders.length; i++) {
-            if (currentChallengedOrders[i] == _orderId) {
-                return true;
-            }
-        }
-        return false;
+        return orderActiveChallengeCount[_orderId] > 0;
     }
 
     // Internal random selection from a given array (shared logic for active and challengeable orders)
@@ -241,104 +215,6 @@ abstract contract MarketOrders is MarketAdmin {
                 mapLen++;
             }
         }
-    }
-
-    /// @notice Select non-expired challengeable orders with inline eviction of expired entries.
-    /// Uses random probing bounded by MAX_CHALLENGE_SELECTION_PROBES to limit gas.
-    /// Evictions are capped by MAX_CHALLENGE_EVICTIONS to prevent OOG when the
-    /// expired backlog is large; remaining evictions are deferred to later heartbeats.
-    function _selectChallengeableOrders(uint256 _randomSeed, uint256 _desiredCount)
-        internal
-        returns (uint256[] memory result)
-    {
-        result = new uint256[](_desiredCount);
-        uint256 found = 0;
-        uint256 nonce = 0; // hash seed (always increments)
-        uint256 attempts = 0; // bounded random attempts
-        uint256 evictions = 0; // expired-order evictions (bounded by cap)
-        uint256 maxAttempts = MAX_CHALLENGE_SELECTION_PROBES + MAX_CHALLENGE_EVICTIONS;
-
-        while (found < _desiredCount && challengeableOrders.length > 0 && attempts < maxAttempts) {
-            attempts++;
-            uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce))) % challengeableOrders.length;
-            uint256 orderId = challengeableOrders[idx];
-            nonce++;
-
-            if (isOrderExpired(orderId)) {
-                if (evictions < MAX_CHALLENGE_EVICTIONS) {
-                    _removeFromChallengeableOrders(orderId);
-                    evictions++;
-                }
-                continue;
-            }
-
-            // Duplicate check (selection count is small, O(found) scan is fine)
-            bool dup = false;
-            for (uint256 j = 0; j < found; j++) {
-                if (result[j] == orderId) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) continue;
-
-            result[found] = orderId;
-            found++;
-        }
-
-        // Deterministic fallback scan reduces challenge-blackout risk when random
-        // sampling misses sparse live entries behind an expired backlog.
-        if (found < _desiredCount && challengeableOrders.length > 0) {
-            uint256 checks = 0;
-            uint256 idx = uint256(keccak256(abi.encodePacked(_randomSeed, nonce, challengeableOrders.length)))
-                % challengeableOrders.length;
-
-            while (found < _desiredCount && challengeableOrders.length > 0 && checks < MAX_CHALLENGE_SELECTION_PROBES) {
-                checks++;
-
-                if (idx >= challengeableOrders.length) {
-                    idx = 0;
-                }
-
-                uint256 orderId = challengeableOrders[idx];
-                if (isOrderExpired(orderId)) {
-                    if (evictions < MAX_CHALLENGE_EVICTIONS) {
-                        _removeFromChallengeableOrders(orderId);
-                        evictions++;
-                        continue;
-                    }
-                    idx++;
-                    continue;
-                }
-
-                bool dup = false;
-                for (uint256 j = 0; j < found; j++) {
-                    if (result[j] == orderId) {
-                        dup = true;
-                        break;
-                    }
-                }
-
-                if (!dup) {
-                    result[found] = orderId;
-                    found++;
-                }
-                idx++;
-            }
-        }
-
-        assembly {
-            mstore(result, found)
-        }
-    }
-
-    // Random order selection function (public wrapper for backward compatibility)
-    function selectRandomOrders(uint256 _randomSeed, uint256 _count)
-        public
-        view
-        returns (uint256[] memory selectedOrders)
-    {
-        return _selectFromArray(activeOrders, _randomSeed, _count);
     }
 
     // Get active orders count

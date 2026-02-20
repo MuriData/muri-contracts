@@ -86,7 +86,7 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         market.setReporterRewardBps(5001);
     }
 
-    function test_ClaimReporterRewards_AfterPrimaryFailure() public {
+    function test_ClaimReporterRewards_AfterSlotExpiry() public {
         _stakeDefaultNode(node1, 0x1234, 0x5678);
         _stakeDefaultNode(node2, 0xABCD, 0xEF01);
 
@@ -94,13 +94,15 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        vm.warp(block.timestamp + STEP + 1);
-        market.triggerHeartbeat();
+        // Activate challenge slots
+        market.activateSlots();
 
-        vm.warp(block.timestamp + (2 * STEP) + 1);
+        // Move past deadline
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
+        // node2 processes expired slots as reporter
         vm.prank(node2);
-        market.reportPrimaryFailure();
+        market.processExpiredSlots();
 
         uint256 pending = market.reporterPendingRewards(node2);
         assertGt(pending, 0);
