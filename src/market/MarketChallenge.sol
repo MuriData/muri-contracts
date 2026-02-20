@@ -8,15 +8,18 @@ import {MarketAccounting} from "./MarketAccounting.sol";
 /// to prove one order. Expired slots are slashed as a side effect of any submitProof call.
 abstract contract MarketChallenge is MarketAccounting {
     /// @notice Submit proof for a specific challenge slot — the ONLY function nodes call.
-    /// Phase 1: sweep expired slots (slash lazy nodes).
+    /// Phase 1: sweep expired slots (slash lazy nodes), using commitment-derived randomness.
     /// Phase 2: validate caller is the challenged node for this slot.
     /// Phase 3: verify ZK proof.
     /// Phase 4: advance slot to next challenge.
     function submitProof(uint256 _slotIndex, uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
         require(_slotIndex < NUM_CHALLENGE_SLOTS, "invalid slot index");
 
-        // Phase 1: sweep expired slots — slashes expired nodes, earns reporter rewards for caller
-        _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL);
+        // Phase 1: sweep expired slots — slashes expired nodes, earns reporter rewards for caller.
+        // Uses the commitment as a high-quality randomness seed for re-advancing expired slots,
+        // since the commitment is a ZK proof nonce that the prover cannot bias without invalidating the proof.
+        uint256 commitmentRandomness = uint256(_commitment) % SNARK_SCALAR_FIELD;
+        _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL, commitmentRandomness);
 
         // Phase 2: validate this slot is active and caller is the challenged node
         ChallengeSlot storage slot = challengeSlots[_slotIndex];
@@ -37,15 +40,15 @@ abstract contract MarketChallenge is MarketAccounting {
 
         emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
-        // Phase 4: advance slot using commitment-derived randomness
-        uint256 newRandomness = uint256(_commitment) % SNARK_SCALAR_FIELD;
-        _advanceSlot(_slotIndex, newRandomness);
+        // Phase 4: advance slot using commitment-derived randomness (same seed as Phase 1)
+        _advanceSlot(_slotIndex, commitmentRandomness);
     }
 
     /// @notice Maintenance function: anyone can call to slash expired slots and earn reporter rewards.
     /// Needed when no nodes are submitting proofs (dead network scenario).
+    /// Uses chain pseudorandomness (prevrandao) for re-advancing slots since no proof commitment is available.
     function processExpiredSlots() external nonReentrant {
-        uint256 processed = _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL);
+        uint256 processed = _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL, 0);
         require(processed > 0, "no expired slots");
         emit ExpiredSlotsProcessed(processed, msg.sender);
     }
@@ -78,14 +81,14 @@ abstract contract MarketChallenge is MarketAccounting {
             }
         }
 
-        require(activated > 0, "no slots activated");
+        // Rotate global seed and emit only when new slots were filled
+        if (activated > 0) {
+            globalSeedRandomness = uint256(
+                keccak256(abi.encodePacked(globalSeedRandomness, block.number, block.prevrandao, msg.sender))
+            ) % SNARK_SCALAR_FIELD;
 
-        // Rotate global seed
-        globalSeedRandomness = uint256(
-            keccak256(abi.encodePacked(globalSeedRandomness, block.number, block.prevrandao, msg.sender))
-        ) % SNARK_SCALAR_FIELD;
-
-        emit SlotsActivated(activated);
+            emit SlotsActivated(activated);
+        }
     }
 
     /// @notice Advance a slot to challenge a new random order/node.
@@ -163,8 +166,15 @@ abstract contract MarketChallenge is MarketAccounting {
     }
 
     /// @notice Sweep expired slots: slash failed nodes, advance or deactivate.
+    /// @param _reporter Address that triggered the sweep (earns reporter rewards).
+    /// @param _maxSweep Maximum number of expired slots to process.
+    /// @param _proofRandomness When non-zero, commitment-derived randomness from a verified proof
+    ///        (used by submitProof). When zero, falls back to chain pseudorandomness (used by processExpiredSlots).
     /// @return processed Number of expired slots processed.
-    function _sweepExpiredSlots(address _reporter, uint256 _maxSweep) internal returns (uint256 processed) {
+    function _sweepExpiredSlots(address _reporter, uint256 _maxSweep, uint256 _proofRandomness)
+        internal
+        returns (uint256 processed)
+    {
         uint256 forcedExitCount = 0;
 
         for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS && processed < _maxSweep; i++) {
@@ -198,12 +208,20 @@ abstract contract MarketChallenge is MarketAccounting {
 
             emit SlotExpired(i, failedNode, slashAmount);
 
-            // Advance slot with fallback randomness
-            uint256 fallbackRandomness = uint256(
-                keccak256(abi.encodePacked(slot.randomness, block.number, block.prevrandao, _reporter, i))
-            ) % SNARK_SCALAR_FIELD;
+            // Derive randomness for re-advancing the expired slot.
+            // When triggered by submitProof, use the proof commitment (unbiasable by the prover).
+            // When triggered by processExpiredSlots (manual maintenance), fall back to chain data.
+            uint256 advanceRandomness;
+            if (_proofRandomness != 0) {
+                advanceRandomness =
+                    uint256(keccak256(abi.encodePacked(_proofRandomness, slot.randomness, i))) % SNARK_SCALAR_FIELD;
+            } else {
+                advanceRandomness = uint256(
+                    keccak256(abi.encodePacked(slot.randomness, block.number, block.prevrandao, _reporter, i))
+                ) % SNARK_SCALAR_FIELD;
+            }
 
-            _advanceSlot(i, fallbackRandomness);
+            _advanceSlot(i, advanceRandomness);
 
             processed++;
 
@@ -250,6 +268,7 @@ abstract contract MarketChallenge is MarketAccounting {
     function _completeExpiredOrderInternal(uint256 _orderId) internal {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return;
+        if (_isOrderUnderActiveChallenge(_orderId)) return;
 
         uint256 settlePeriod = order.startPeriod + order.periods;
         _settleAndReleaseNodes(order, _orderId, settlePeriod);

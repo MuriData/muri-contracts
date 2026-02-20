@@ -25,9 +25,13 @@ contract MarketChallengeTest is MarketTestBase {
         assertTrue(slotNode != address(0));
     }
 
-    function test_ActivateSlots_RevertsWhenNoChallengeableOrders() public {
-        vm.expectRevert("no slots activated");
+    function test_ActivateSlots_NoOpWhenNoChallengeableOrders() public {
+        // Should not revert — cleanup side effects still commit
         market.activateSlots();
+
+        // No slots should be active
+        (uint256 slotOrderId,,,,) = market.getSlotInfo(0);
+        assertEq(slotOrderId, 0);
     }
 
     function test_SubmitProof_RevertsInvalidSlotIndex() public {
@@ -125,6 +129,35 @@ contract MarketChallengeTest is MarketTestBase {
         vm.prank(node1);
         vm.expectRevert("active prover cannot quit");
         market.quitOrder(orderId);
+    }
+
+    function test_CleanupSkipsOrderUnderActiveChallenge() public {
+        // Setup: short-lived order (1 period) with a node, activate challenge slot
+        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        (uint256 orderId,) = _placeOrder(user1, 256, 1, 1, 1e12);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        // Verify the order is under active challenge
+        assertGt(market.orderActiveChallengeCount(orderId), 0);
+
+        // Expire the order by warping past its period
+        vm.warp(block.timestamp + 7 days + 1);
+
+        // The order is now expired AND under active challenge.
+        // Calling activateSlots triggers _cleanupExpiredOrders internally.
+        // Before the fix, cleanup would delete the order even though a slot points to it.
+
+        // The order should still exist because it's under active challenge
+        (address owner_,,,,,,) = market.getOrderDetails(orderId);
+        assertEq(owner_, user1, "order should survive cleanup while under active challenge");
+
+        // The order's data should still be readable (not zeroed out)
+        (,, uint256 root_,,,,) = market.getOrderDetails(orderId);
+        assertGt(root_, 0, "order file root should not be zeroed");
     }
 
     function test_SlotExpiry_SweepViaSubmitProof() public {
