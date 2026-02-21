@@ -136,10 +136,13 @@ abstract contract MarketChallenge is MarketAccounting {
             uint256 nodeIdx = uint256(keccak256(abi.encodePacked(_randomness, candidateOrderId, nonce))) % nodes.length;
             address selectedNode = nodes[nodeIdx];
 
-            // Set slot state
+            // Set slot state.
+            // Randomness must be non-zero — the ZK circuit multiplies chunk data by
+            // randomness, so zero collapses message hash to a constant for all chunks.
+            uint256 safeRandomness = _randomness == 0 ? 1 : _randomness;
             slot.orderId = candidateOrderId;
             slot.challengedNode = selectedNode;
-            slot.randomness = _randomness;
+            slot.randomness = safeRandomness;
             slot.deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS;
 
             // Increment counters
