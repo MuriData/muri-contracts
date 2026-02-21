@@ -1820,14 +1820,14 @@ contract MarketTest is Test {
     bytes32 constant ZK_COMMITMENT = bytes32(0x1af93afe5bf0db32c8456726cd713e7b6713f1a8989e0597bc1fc3e1bf315c97);
     uint256 constant ZK_PUB_KEY = 0x259115f2259ea0923f1e3a18a4122a606d88ea1c25f49f8766df1aba7864efd1;
 
-    uint256 constant ZK_PROOF_0 = 0x264c7ba628c840b2eb9d010a9f3b726beab8e5c5accef8473f12d82eeaf69546;
-    uint256 constant ZK_PROOF_1 = 0x1329d3897fb51ce1a44fb2bf286209595b00dcb6034e3672748b6433884eabe8;
-    uint256 constant ZK_PROOF_2 = 0x23721a5f9761771d6974a2796eb7a1547036499fd570bf37ed153d945372b1c3;
-    uint256 constant ZK_PROOF_3 = 0x0be3c130a145efd7718e8433f95f65b2f4aa763d796a7073a3e99b8554e26898;
-    uint256 constant ZK_PROOF_4 = 0x190de450e10849bd0dbc334f9435ccefde224ca4db422b010f4952823ba6d0d4;
-    uint256 constant ZK_PROOF_5 = 0x2f4cfac6e681adb9b27c623d51e682b7159167979226b8d7b12e0970622770fe;
-    uint256 constant ZK_PROOF_6 = 0x2c7cf95c17240dc12a86c1a87d4ae0fea5cf4be3759147eb8d2d27eb5cdcfdc4;
-    uint256 constant ZK_PROOF_7 = 0x28f85a98a96004d5d79e70a7e4908cb19e6efc02b926d9a280ff94456a11c950;
+    uint256 constant ZK_PROOF_0 = 0x23a4079f9356d1e8f588b765477d28397b9451a2cb46dc961eb5191453d8a977;
+    uint256 constant ZK_PROOF_1 = 0x2193aa11821924543f97eadee7c135ff543acf88d658d2084a7b2b93a20fd2b2;
+    uint256 constant ZK_PROOF_2 = 0x0a9f424b6fb63da68d52d5d8ea0a929977a8ae183d6aa023adf00a97c63d6f53;
+    uint256 constant ZK_PROOF_3 = 0x026fba6f91e9e5c5522ca41d56d5b651a43b499bb27802bf093bbe2c89011bd5;
+    uint256 constant ZK_PROOF_4 = 0x1008e3d3c1971a132c69a256eef86345c548898e53d9b760382066cf809cfa39;
+    uint256 constant ZK_PROOF_5 = 0x2ebc4fb7c000ce3a2152a962abf038e061f37b8a3ef79530994cadef27298b7b;
+    uint256 constant ZK_PROOF_6 = 0x2260f2e1218d47b9a99489cf35ae4439c30f58c7b9b738d7cf346548385adacb;
+    uint256 constant ZK_PROOF_7 = 0x19ab439c0c556b13754e1b4f16651f94c3b8a5a462c54d409652c63b6f5357df;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
     // challengeSlots[5] starts at slot 26, each ChallengeSlot = 4 words
