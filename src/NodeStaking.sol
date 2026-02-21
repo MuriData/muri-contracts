@@ -24,8 +24,7 @@ contract NodeStaking {
         uint256 stake; // locked native token (utility token on subnet)
         uint64 capacity; // bytes committed (≤ stake / stakePerByte)
         uint64 used; // active bytes
-        uint256 publicKeyX; // EdDSA public key X coordinate for proof verification
-        uint256 publicKeyY; // EdDSA public key Y coordinate for proof verification
+        uint256 publicKey; // hash-based public key H(secretKey) for proof verification
     }
 
     mapping(address => NodeInfo) public nodes;
@@ -33,7 +32,7 @@ contract NodeStaking {
     mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
     uint256 public constant STAKE_PER_BYTE = 10 ** 14; // configurable
 
-    /// @dev BN254 scalar field order (Fr). EdDSA public key coordinates must be valid field elements.
+    /// @dev BN254 scalar field order (Fr). Public key must be a valid field element.
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
     // ------------------------------------------------------------------
@@ -70,15 +69,10 @@ contract NodeStaking {
 
     /// @notice Register a new storage node by locking native tokens proportional to the desired capacity.
     /// @param _capacity The number of bytes the node commits to serve. Must be > 0.
-    /// @param _publicKeyX EdDSA public key X coordinate for proof verification
-    /// @param _publicKeyY EdDSA public key Y coordinate for proof verification
-    function stakeNode(uint64 _capacity, uint256 _publicKeyX, uint256 _publicKeyY) external payable nonReentrant {
+    /// @param _publicKey Hash-based public key H(secretKey) for proof verification
+    function stakeNode(uint64 _capacity, uint256 _publicKey) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
-        require(
-            _publicKeyX != 0 && _publicKeyX < SNARK_SCALAR_FIELD && _publicKeyY != 0
-                && _publicKeyY < SNARK_SCALAR_FIELD,
-            "public key not in field"
-        );
+        require(_publicKey != 0 && _publicKey < SNARK_SCALAR_FIELD, "public key not in field");
 
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
@@ -89,8 +83,7 @@ contract NodeStaking {
         info.stake = requiredStake;
         info.capacity = _capacity;
         info.used = 0;
-        info.publicKeyX = _publicKeyX;
-        info.publicKeyY = _publicKeyY;
+        info.publicKey = _publicKey;
 
         // Add to node list for tracking
         nodeIndexInList[msg.sender] = nodeList.length;
@@ -198,15 +191,14 @@ contract NodeStaking {
     /// @return stake The amount of stake locked
     /// @return capacity The total capacity in bytes
     /// @return used The currently used capacity in bytes
-    /// @return publicKeyX The node's public key X coordinate
-    /// @return publicKeyY The node's public key Y coordinate
+    /// @return publicKey The node's hash-based public key
     function getNodeInfo(address node)
         external
         view
-        returns (uint256 stake, uint64 capacity, uint64 used, uint256 publicKeyX, uint256 publicKeyY)
+        returns (uint256 stake, uint64 capacity, uint64 used, uint256 publicKey)
     {
         NodeInfo storage info = nodes[node];
-        return (info.stake, info.capacity, info.used, info.publicKeyX, info.publicKeyY);
+        return (info.stake, info.capacity, info.used, info.publicKey);
     }
 
     /// @notice Update the used capacity for a node (only callable by the market contract)

@@ -86,7 +86,7 @@ abstract contract MarketOrders is MarketAdmin {
         nodeOrderStartTimestamp[msg.sender][_orderId] = block.timestamp;
 
         // Update node's used capacity
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(msg.sender);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
         nodeStaking.updateNodeUsed(msg.sender, used + order.maxSize);
 
         emit OrderFulfilled(_orderId, msg.sender);
@@ -375,7 +375,7 @@ abstract contract MarketOrders is MarketAdmin {
         // Cap to available stake to prevent revert.
         // Then enforce that the slash still leaves enough collateral to keep
         // all other assignments (excluding the order being quit).
-        (uint256 nodeStake,, uint64 usedBeforeQuit,,) = nodeStaking.getNodeInfo(msg.sender);
+        (uint256 nodeStake,, uint64 usedBeforeQuit,) = nodeStaking.getNodeInfo(msg.sender);
         if (slashAmount > nodeStake) {
             slashAmount = nodeStake;
         }
@@ -426,7 +426,7 @@ abstract contract MarketOrders is MarketAdmin {
         uint256 exitCount = 0;
 
         // Get node's new capacity and previous usage after slashing
-        (, uint64 newCapacity, uint64 usedBefore,,) = nodeStaking.getNodeInfo(_node);
+        (, uint64 newCapacity, uint64 usedBefore,) = nodeStaking.getNodeInfo(_node);
         uint64 totalFreed = 0;
         uint256 settlePeriod = currentPeriod();
 
@@ -537,7 +537,7 @@ abstract contract MarketOrders is MarketAdmin {
         }
 
         // Free up node capacity
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(_node);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(_node);
         nodeStaking.updateNodeUsed(_node, used - order.maxSize);
 
         // Remove order from node's order list
@@ -574,7 +574,7 @@ abstract contract MarketOrders is MarketAdmin {
             delete nodeOrderStartTimestamp[node][_orderId];
             delete nodeOrderEarnings[_orderId][node];
 
-            (,, uint64 used,,) = nodeStaking.getNodeInfo(node);
+            (,, uint64 used,) = nodeStaking.getNodeInfo(node);
             nodeStaking.updateNodeUsed(node, used - order.maxSize);
 
             assignedNodes.pop();

@@ -12,14 +12,13 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_NodeRegistration() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
 
-        (uint256 stake, uint64 capacity, uint64 used, uint256 pubX, uint256 pubY) = nodeStaking.getNodeInfo(node1);
+        (uint256 stake, uint64 capacity, uint64 used, uint256 pubKey) = nodeStaking.getNodeInfo(node1);
         assertEq(stake, uint256(TEST_CAPACITY) * STAKE_PER_BYTE);
         assertEq(capacity, TEST_CAPACITY);
         assertEq(used, 0);
-        assertEq(pubX, 0x1234);
-        assertEq(pubY, 0x5678);
+        assertEq(pubKey, 0x1234);
         assertTrue(nodeStaking.isValidNode(node1));
     }
 
@@ -38,13 +37,13 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_ExecuteOrder_AssignsNodeAndConsumesCapacity() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 1024);
 
         address[] memory orderNodes = market.getOrderNodes(orderId);
@@ -67,7 +66,7 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_RevertWhen_ExecuteOrder_DuplicateAssignment() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeOrder(user1, 256, 4, 2, 1e12);
 
         vm.startPrank(node1);
@@ -93,7 +92,7 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_CompleteExpiredOrder_ReleasesCapacityAndQueuesRefund() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, 1024, 1, 1, 1e12);
 
         vm.prank(node1);
@@ -103,7 +102,7 @@ contract MarketCoreTest is MarketTestBase {
         vm.prank(address(0xBEEF));
         market.completeExpiredOrder(orderId);
 
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 0);
 
         assertEq(market.getActiveOrdersCount(), 0);
@@ -115,7 +114,7 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_QuitOrder_RemovesNodeAndEmitsUnderReplicated() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -130,12 +129,12 @@ contract MarketCoreTest is MarketTestBase {
         address[] memory orderNodes = market.getOrderNodes(orderId);
         assertEq(orderNodes.length, 0);
 
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 0);
     }
 
     function test_SlashNode_RevertUnauthorized() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
 
         vm.prank(user1);
         vm.expectRevert("not authorized");
@@ -143,7 +142,7 @@ contract MarketCoreTest is MarketTestBase {
     }
 
     function test_SlashAuthority_ForcedExit_RemovesNodeFromOrder() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);

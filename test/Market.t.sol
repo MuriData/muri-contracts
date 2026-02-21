@@ -42,18 +42,18 @@ contract MarketTest is Test {
         vm.deal(node3, 100 ether);
     }
 
-    function _stakeTestNode(address node, uint256 keyX, uint256 keyY) internal {
+    function _stakeTestNode(address node, uint256 key) internal {
         vm.prank(node);
-        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, keyX, keyY);
+        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, key);
     }
 
     function test_MultipleNodesExecuteOrder() public {
         // Register multiple nodes
         vm.prank(node1);
-        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0x1234);
 
         vm.prank(node2);
-        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0xabcd, 0xef01);
+        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 0xabcd);
 
         // Place an order with 2 replicas
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -76,8 +76,8 @@ contract MarketTest is Test {
         market.executeOrder(orderId);
 
         // Check both nodes have used capacity
-        (,, uint64 used1,,) = nodeStaking.getNodeInfo(node1);
-        (,, uint64 used2,,) = nodeStaking.getNodeInfo(node2);
+        (,, uint64 used1,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used2,) = nodeStaking.getNodeInfo(node2);
         assertEq(used1, maxSize);
         assertEq(used2, maxSize);
 
@@ -93,7 +93,7 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         // Place order
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -134,7 +134,7 @@ contract MarketTest is Test {
     function test_RevertWhen_ExecuteOrderInsufficientCapacity() public {
         // Register node with small capacity
         vm.prank(node1);
-        nodeStaking.stakeNode{value: 100 * STAKE_PER_BYTE}(100, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: 100 * STAKE_PER_BYTE}(100, 0x1234);
 
         // Try to place large order
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -168,7 +168,7 @@ contract MarketTest is Test {
     }
 
     function test_CancelOrderQueuesPendingRewards() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
@@ -221,8 +221,8 @@ contract MarketTest is Test {
     }
 
     function test_CancellationPenaltyDistributedToMultipleNodes() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xaaaa);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
@@ -274,7 +274,7 @@ contract MarketTest is Test {
     }
 
     function test_CancellationPenalty_MEVSiphonPrevented() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 512;
@@ -300,8 +300,8 @@ contract MarketTest is Test {
     }
 
     function test_CancellationPenalty_NoPenaltyWhenAllNodesNew() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xaaaa);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -327,8 +327,8 @@ contract MarketTest is Test {
     }
 
     function test_CancellationPenalty_MixedEligibility() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xaaaa);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -369,7 +369,7 @@ contract MarketTest is Test {
     }
 
     function test_RevertWhen_ExecuteOrderAfterExpiry() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
@@ -386,7 +386,7 @@ contract MarketTest is Test {
     }
 
     function test_AuthoritySlash_NoReporterReward() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         // Grant authority to user2
         market.setSlashAuthority(user2, true);
@@ -407,7 +407,7 @@ contract MarketTest is Test {
     }
 
     function test_QuitOrder_NoReporterReward() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -508,15 +508,15 @@ contract MarketTest is Test {
     }
 
     function test_ExecuteOrder_RevertOrderDoesNotExist() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         vm.prank(node1);
         vm.expectRevert("order does not exist");
         market.executeOrder(999);
     }
 
     function test_ExecuteOrder_RevertOrderFullyFilled() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xabcd, 0xef01);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xabcd);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -551,7 +551,7 @@ contract MarketTest is Test {
 
     function test_CompleteExpiredOrder_RefundsExcessEscrow() public {
         // Place order with 2 replicas but only 1 filled → excess escrow refunded
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint16 periods = 1;
@@ -599,7 +599,7 @@ contract MarketTest is Test {
     }
 
     function test_QuitOrder_RevertExpired() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint256 totalCost = uint256(maxSize) * 1 * 1e12;
@@ -617,8 +617,8 @@ contract MarketTest is Test {
     }
 
     function test_QuitOrder_RevertNotAssigned() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xabcd, 0xef01);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xabcd);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -636,7 +636,7 @@ contract MarketTest is Test {
 
     function test_QuitOrder_SlashCappedToStake() public {
         // Use a high price so the computed slash exceeds node stake
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 1024;
@@ -651,7 +651,7 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         // Confirm the uncapped slash would exceed stake
         uint256 rawSlash = uint256(maxSize) * price * 3; // QUIT_SLASH_PERIODS = 3
         assertTrue(rawSlash > stakeBefore, "test setup: slash should exceed stake");
@@ -671,7 +671,7 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -693,7 +693,7 @@ contract MarketTest is Test {
         assertEq(orderNodes.length, 0);
 
         // Node's used capacity should be back to 0
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 0);
     }
 
@@ -703,7 +703,7 @@ contract MarketTest is Test {
         uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
         vm.deal(node1, stake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: stake}(capacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
 
@@ -740,12 +740,12 @@ contract MarketTest is Test {
         assertEq(nodeOrders.length, 1, "node should keep exactly one order");
         assertEq(nodeOrders[0], largeOrderId, "remaining order should be the large one");
 
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, largeSize, "used capacity should only reflect large order");
     }
 
     function test_SlashNode_External_RevertZeroAmount() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         vm.expectRevert("invalid slash amount");
         market.slashNode(node1, 0, "test");
     }
@@ -770,7 +770,7 @@ contract MarketTest is Test {
     function test_ReporterReward_MaxBps() public {
         market.setReporterRewardBps(5000); // 50%
 
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         // Authority slash — uses address(0) reporter so no reward even at max bps
         market.setSlashAuthority(user2, true);
@@ -808,7 +808,7 @@ contract MarketTest is Test {
     }
 
     function test_GetNodeEarningsInfo() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint256 price = 1e12;
@@ -884,7 +884,7 @@ contract MarketTest is Test {
         uint256 minStake = uint256(minCap) * STAKE_PER_BYTE;
         vm.deal(node1, minStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: minStake}(minCap, 0xAAAA, 0xBBBB);
+        nodeStaking.stakeNode{value: minStake}(minCap, 0xAAAA);
 
         // Place a small order
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -906,7 +906,7 @@ contract MarketTest is Test {
 
         // If forced exit happened, node should have been removed from all orders
         // Verify node has 0 orders remaining
-        (,, uint64 used,,) = nodeStaking.getNodeInfo(node1);
+        (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 0, "used should be 0 after forced exit");
     }
 
@@ -920,9 +920,9 @@ contract MarketTest is Test {
 
     function test_QuitOrder_MiddleNode_SwapAndPop() public {
         // Stake 3 nodes
-        _stakeTestNode(node1, 0xAAAA, 0xBBBB);
-        _stakeTestNode(node2, 0xCCCC, 0xDDDD);
-        _stakeTestNode(node3, 0xEEEE, 0xFFFF);
+        _stakeTestNode(node1, 0xAAAA);
+        _stakeTestNode(node2, 0xCCCC);
+        _stakeTestNode(node3, 0xEEEE);
 
         // Place order with 3 replicas (cost = maxSize * periods * price * replicas)
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -952,7 +952,7 @@ contract MarketTest is Test {
     }
 
     function test_CompleteExpiredOrder_WithRefund() public {
-        _stakeTestNode(node1, 0xAAAA, 0xBBBB);
+        _stakeTestNode(node1, 0xAAAA);
 
         // Place order with generous escrow
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -1019,7 +1019,7 @@ contract MarketTest is Test {
     }
 
     function test_OverpaymentNotDoubleCountedOnCancel_WithNodes() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 512;
@@ -1055,7 +1055,7 @@ contract MarketTest is Test {
     }
 
     function test_OverpaymentNotDoubleCountedOnComplete() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1093,8 +1093,8 @@ contract MarketTest is Test {
     }
 
     function test_OverpaymentSolvency_MultipleOrders() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xaaaa, 0xbbbb);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xaaaa);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 price = 1e12;
@@ -1166,7 +1166,7 @@ contract MarketTest is Test {
     function test_QuitOrder_NonReentrant() public {
         // The nonReentrant modifier is on quitOrder — verify it's applied by checking
         // that the function signature hasn't changed (still callable normally)
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint256 totalCost = uint256(maxSize) * 4 * 1e12;
@@ -1190,7 +1190,7 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1203,12 +1203,12 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
         vm.prank(node1);
         market.quitOrder(orderId);
 
-        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
 
         // Slash = maxSize * price * 3 = 256 * 1e12 * 3 = 768e12
         uint256 expectedSlash = uint256(maxSize) * price * 3;
@@ -1225,7 +1225,7 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1238,12 +1238,12 @@ contract MarketTest is Test {
         vm.prank(node1);
         market.executeOrder(orderId);
 
-        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
         vm.prank(node1);
         market.quitOrder(orderId);
 
-        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
 
         // Slash should be capped: maxSize * price * 2 (not 3)
         uint256 expectedSlash = uint256(maxSize) * price * 2;
@@ -1251,7 +1251,7 @@ contract MarketTest is Test {
     }
 
     function test_OrderUnderReplicated_EmittedOnForcedExit() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1280,7 +1280,7 @@ contract MarketTest is Test {
         uint256 hugeStake = uint256(hugeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, hugeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: hugeStake}(hugeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: hugeStake}(hugeCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 1; // tiny orders
@@ -1320,7 +1320,7 @@ contract MarketTest is Test {
     }
 
     function test_ChallengeableOrders_AddedOnFirstNode() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1346,10 +1346,10 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
         vm.deal(node2, largeStake);
         vm.prank(node2);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd, 0xef01);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xabcd);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1371,7 +1371,7 @@ contract MarketTest is Test {
     }
 
     function test_ChallengeableOrders_RemovedOnCancel() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1394,7 +1394,7 @@ contract MarketTest is Test {
     }
 
     function test_ChallengeableOrders_RemovedOnExpiry() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1419,7 +1419,7 @@ contract MarketTest is Test {
     }
 
     function test_ChallengeableOrders_RemovedWhenLastNodeQuits() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1451,7 +1451,7 @@ contract MarketTest is Test {
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, largeStake);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1481,7 +1481,7 @@ contract MarketTest is Test {
     }
 
     function test_BoundarySniping_NoPartialPeriodReward() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         // Place a 2-period order at period 0
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -1515,7 +1515,7 @@ contract MarketTest is Test {
     }
 
     function test_ExactBoundaryJoin_EarnsFullPeriod() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -1542,7 +1542,7 @@ contract MarketTest is Test {
     }
 
     function test_RejoinSameOrder_FullRewardsOnSecondAssignment() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         // Place a 4-period order
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
@@ -1590,7 +1590,7 @@ contract MarketTest is Test {
     }
 
     function test_StatsAggregates_PlaceAndComplete() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint16 periods = 2;
@@ -1620,7 +1620,7 @@ contract MarketTest is Test {
     }
 
     function test_StatsAggregates_MultipleOrders() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 100;
         uint16 periods = 1;
@@ -1643,7 +1643,7 @@ contract MarketTest is Test {
     }
 
     function test_StatsAggregates_CancelReducesAggregates() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint16 periods = 4;
@@ -1672,7 +1672,7 @@ contract MarketTest is Test {
     }
 
     function test_StatsAggregates_WithdrawnTracksRewards() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint16 periods = 2;
@@ -1701,7 +1701,7 @@ contract MarketTest is Test {
     }
 
     function test_FinancialStats_LifetimeCountersMonotonic() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
         uint16 periods = 1;
@@ -1737,7 +1737,7 @@ contract MarketTest is Test {
     }
 
     function test_FinancialStats_PartialCompletion() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 100;
         uint256 price = 1e12;
@@ -1778,7 +1778,7 @@ contract MarketTest is Test {
         assertEq(used0, 0);
 
         // Stake node1
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
         (uint256 nodes1, uint256 cap1, uint256 used1) = ns.getNetworkStats();
         assertEq(nodes1, 1);
         assertEq(cap1, TEST_CAPACITY);
@@ -1816,19 +1816,18 @@ contract MarketTest is Test {
 
     // Valid proof fixture generated by muri-zkproof/export_proof.go
     uint256 constant ZK_RANDOMNESS = 0x000000000000000000000000000000000000000000000000000000000000002a;
-    uint256 constant ZK_FILE_ROOT = 0x097b1de1037388e4484f286fa2884be0c6416fbbd3b2b0528287d99c6db8caba;
-    bytes32 constant ZK_COMMITMENT = bytes32(0x012a3bc33ad43c5cb7707f37754f2bd9cb12da7cae32aa282be0530414e341e9);
-    uint256 constant ZK_PUB_KEY_X = 0x102ca72a7cfd7b48016782321304b3fef012bc6e7e94d0273eac1e97e1e8a3dc;
-    uint256 constant ZK_PUB_KEY_Y = 0x264ce84ed139f4b242bc2a6ec482f89c376be38daf5426ac3509836a2e39c13e;
+    uint256 constant ZK_FILE_ROOT = 0x061d8537640851cfa5f580b76fdb901efefe3ecbabf59c740caddecc4a425453;
+    bytes32 constant ZK_COMMITMENT = bytes32(0x1af93afe5bf0db32c8456726cd713e7b6713f1a8989e0597bc1fc3e1bf315c97);
+    uint256 constant ZK_PUB_KEY = 0x259115f2259ea0923f1e3a18a4122a606d88ea1c25f49f8766df1aba7864efd1;
 
-    uint256 constant ZK_PROOF_0 = 0x184e921f1ba11980804e67e7f448965f1a4465426c0a03e9e4ed6f9033860ae1;
-    uint256 constant ZK_PROOF_1 = 0x015315536b1c9a5174d007a8f77b01e291ce55af77337c99e0b552c2940c7201;
-    uint256 constant ZK_PROOF_2 = 0x0f50780d3d336e878f3fb268ad2f44a4759f7a630c614d042972853cdde61a82;
-    uint256 constant ZK_PROOF_3 = 0x1a9708deb9df7ae67f9a4b34e20287b4c30dc9c0ba68b9f3e287fecce49efab7;
-    uint256 constant ZK_PROOF_4 = 0x0ee04951f17e6a9d0e0e6f28373e8c4943b8449f84003156c6f463e2ac1d8a68;
-    uint256 constant ZK_PROOF_5 = 0x07d96d27689438af3c16fd13e8be80cbaeae2a6dd2f15acde9ddf0c45f5da49f;
-    uint256 constant ZK_PROOF_6 = 0x084c9995ac0503e4ca367cbbe43d765e07d3680a5c972d81dcef4d93ca256aba;
-    uint256 constant ZK_PROOF_7 = 0x27e852fc577dc5bc8697f8c9eea71f48236447f85ae116b986f315c669d60142;
+    uint256 constant ZK_PROOF_0 = 0x264c7ba628c840b2eb9d010a9f3b726beab8e5c5accef8473f12d82eeaf69546;
+    uint256 constant ZK_PROOF_1 = 0x1329d3897fb51ce1a44fb2bf286209595b00dcb6034e3672748b6433884eabe8;
+    uint256 constant ZK_PROOF_2 = 0x23721a5f9761771d6974a2796eb7a1547036499fd570bf37ed153d945372b1c3;
+    uint256 constant ZK_PROOF_3 = 0x0be3c130a145efd7718e8433f95f65b2f4aa763d796a7073a3e99b8554e26898;
+    uint256 constant ZK_PROOF_4 = 0x190de450e10849bd0dbc334f9435ccefde224ca4db422b010f4952823ba6d0d4;
+    uint256 constant ZK_PROOF_5 = 0x2f4cfac6e681adb9b27c623d51e682b7159167979226b8d7b12e0970622770fe;
+    uint256 constant ZK_PROOF_6 = 0x2c7cf95c17240dc12a86c1a87d4ae0fea5cf4be3759147eb8d2d27eb5cdcfdc4;
+    uint256 constant ZK_PROOF_7 = 0x28f85a98a96004d5d79e70a7e4908cb19e6efc02b926d9a280ff94456a11c950;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
     // challengeSlots[5] starts at slot 26, each ChallengeSlot = 4 words
@@ -1882,7 +1881,7 @@ contract MarketTest is Test {
         uint256 stakeAmt = uint256(TEST_CAPACITY) * STAKE_PER_BYTE;
         vm.deal(node, stakeAmt);
         vm.prank(node);
-        nodeStaking.stakeNode{value: stakeAmt}(TEST_CAPACITY, ZK_PUB_KEY_X, ZK_PUB_KEY_Y);
+        nodeStaking.stakeNode{value: stakeAmt}(TEST_CAPACITY, ZK_PUB_KEY);
     }
 
     /// @dev Place an order using the ZK file root
@@ -1991,9 +1990,9 @@ contract MarketTest is Test {
     }
 
     function test_SubmitProof_RevertNodePubKeyNotSet() public {
-        // Stake node with zero keys
+        // Stake node with a valid key
         vm.prank(node3);
-        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 1, 1);
+        nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 1);
 
         uint256 orderId = _placeZKOrder();
         vm.prank(node3);
@@ -2001,11 +2000,10 @@ contract MarketTest is Test {
 
         _setupZKSlotChallenge(node3, orderId);
 
-        // Zero out the public keys via storage
-        // nodes mapping is at slot 0 in NodeStaking, NodeInfo has: stake(+0), capacity+used(+1), pubKeyX(+2), pubKeyY(+3)
+        // Zero out the public key via storage
+        // nodes mapping is at slot 0 in NodeStaking, NodeInfo has: stake(+0), capacity+used(+1), publicKey(+2)
         bytes32 nodeInfoBase = keccak256(abi.encode(node3, uint256(0)));
         vm.store(address(nodeStaking), bytes32(uint256(nodeInfoBase) + 2), bytes32(uint256(0)));
-        vm.store(address(nodeStaking), bytes32(uint256(nodeInfoBase) + 3), bytes32(uint256(0)));
 
         uint256[8] memory proof = _zkProof();
         vm.prank(node3);
@@ -2018,7 +2016,7 @@ contract MarketTest is Test {
     // =========================================================================
 
     function test_ActivateSlots_Integration() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12;
@@ -2042,8 +2040,8 @@ contract MarketTest is Test {
     }
 
     function test_ProcessExpiredSlots_SlashesFailedNode() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xABCD, 0xEF01);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xABCD);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12;
@@ -2055,7 +2053,7 @@ contract MarketTest is Test {
 
         market.activateSlots();
 
-        (uint256 stakeBefore,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
         // Move past deadline
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
@@ -2064,13 +2062,13 @@ contract MarketTest is Test {
         vm.prank(node2);
         market.processExpiredSlots();
 
-        (uint256 stakeAfter,,,,) = nodeStaking.getNodeInfo(node1);
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         assertTrue(stakeAfter < stakeBefore, "node1 should be slashed");
         assertGt(market.reporterPendingRewards(node2), 0, "reporter should earn reward");
     }
 
     function test_QuitOrder_RevertForChallengedProver() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12;
@@ -2089,13 +2087,13 @@ contract MarketTest is Test {
     }
 
     function test_QuitOrder_AllowedForNonChallengedProver() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         uint64 largeCapacity = TEST_CAPACITY * 4;
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_BYTE;
         vm.deal(node2, largeStake);
         vm.prank(node2);
-        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xABCD, 0xEF01);
+        nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0xABCD);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12 * 2; // 2 replicas
@@ -2117,7 +2115,7 @@ contract MarketTest is Test {
     }
 
     function test_CompleteExpiredOrder_RevertDuringActiveChallenge() public {
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -2157,8 +2155,8 @@ contract MarketTest is Test {
     function test_ReporterReward_ZeroBps_NoReward() public {
         market.setReporterRewardBps(0);
 
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xABCD, 0xEF01);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xABCD);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12;
@@ -2182,7 +2180,7 @@ contract MarketTest is Test {
     function test_RandomnessAlwaysInField_ActivateSlots() public {
         uint256 SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
 
-        _stakeTestNode(node1, 0x1234, 0x5678);
+        _stakeTestNode(node1, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256 totalCost = uint256(256) * 4 * 1e12;
@@ -2207,8 +2205,8 @@ contract MarketTest is Test {
         assertEq(market.pendingRefunds(address(receiver)), 0, "no overpayment in exact payment");
 
         // Stake nodes
-        _stakeTestNode(node1, 0x1234, 0x5678);
-        _stakeTestNode(node2, 0xABCD, 0xEF01);
+        _stakeTestNode(node1, 0x1234);
+        _stakeTestNode(node2, 0xABCD);
 
         // Execute the order
         vm.prank(node1);
@@ -2230,7 +2228,7 @@ contract MarketTest is Test {
         uint256 bigStake = uint256(bigCapacity) * STAKE_PER_BYTE;
         vm.deal(node1, bigStake + 1 ether);
         vm.prank(node1);
-        nodeStaking.stakeNode{value: bigStake}(bigCapacity, 0x1234, 0x5678);
+        nodeStaking.stakeNode{value: bigStake}(bigCapacity, 0x1234);
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
@@ -2282,7 +2280,7 @@ contract MaliciousMarketClaim {
         uint256 price
     ) external payable {
         // Stake as node
-        nodeStaking.stakeNode{value: msg.value}(capacity, 0xAAAA, 0xBBBB);
+        nodeStaking.stakeNode{value: msg.value}(capacity, 0xAAAA);
 
         // Place order
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: fileRoot, uri: fileUri});

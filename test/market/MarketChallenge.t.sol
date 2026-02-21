@@ -5,7 +5,7 @@ import {MarketTestBase} from "./MarketBase.t.sol";
 
 contract MarketChallengeTest is MarketTestBase {
     function test_ActivateSlots_BootstrapsRandomnessAndSlots() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -49,8 +49,8 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_SubmitProof_RevertsWhenNotChallengedNode() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
-        _stakeDefaultNode(node2, 0xABCD, 0xEF01);
+        _stakeDefaultNode(node1, 0x1234);
+        _stakeDefaultNode(node2, 0xABCD);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -81,8 +81,8 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_ProcessExpiredSlots_SlashesAndRewardsReporter() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
-        _stakeDefaultNode(node2, 0xABCD, 0xEF01);
+        _stakeDefaultNode(node1, 0x1234);
+        _stakeDefaultNode(node2, 0xABCD);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -118,7 +118,7 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_QuitOrder_RevertsForChallengedNode() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -133,7 +133,7 @@ contract MarketChallengeTest is MarketTestBase {
 
     function test_CleanupSkipsOrderUnderActiveChallenge() public {
         // Setup: short-lived order (1 period) with a node, activate challenge slot
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeOrder(user1, 256, 1, 1, 1e12);
 
         vm.prank(node1);
@@ -162,8 +162,8 @@ contract MarketChallengeTest is MarketTestBase {
 
     function test_SlotExpiry_SweepViaSubmitProof() public {
         // Two nodes, one order each
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
-        _stakeNode(node2, TEST_CAPACITY, 0xABCD, 0xEF01);
+        _stakeDefaultNode(node1, 0x1234);
+        _stakeNode(node2, TEST_CAPACITY, 0xABCD);
 
         (uint256 order1,) = _placeDefaultOrder(user1, 1);
         (uint256 order2,) = _placeOrder(user1, 512, 4, 1, 1e12);

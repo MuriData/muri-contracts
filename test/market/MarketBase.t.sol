@@ -41,15 +41,15 @@ abstract contract MarketTestBase is Test {
         return MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
     }
 
-    function _stakeNode(address node, uint64 capacity, uint256 keyX, uint256 keyY) internal {
+    function _stakeNode(address node, uint64 capacity, uint256 key) internal {
         uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
         vm.deal(node, node.balance + stake);
         vm.prank(node);
-        nodeStaking.stakeNode{value: stake}(capacity, keyX, keyY);
+        nodeStaking.stakeNode{value: stake}(capacity, key);
     }
 
-    function _stakeDefaultNode(address node, uint256 keyX, uint256 keyY) internal {
-        _stakeNode(node, TEST_CAPACITY, keyX, keyY);
+    function _stakeDefaultNode(address node, uint256 key) internal {
+        _stakeNode(node, TEST_CAPACITY, key);
     }
 
     function _placeOrder(address owner_, uint64 maxSize, uint16 periods, uint8 replicas, uint256 price)
@@ -68,7 +68,7 @@ abstract contract MarketTestBase is Test {
     /// @notice Bootstrap a single slot challenge: stake node, place order, execute, activate slots.
     /// Returns the orderId and the challenged node address from slot 0.
     function _bootstrapSingleSlotChallenge() internal returns (uint256 orderId, address challengedNode) {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);

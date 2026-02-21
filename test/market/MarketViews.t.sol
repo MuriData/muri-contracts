@@ -5,7 +5,7 @@ import {MarketTestBase} from "./MarketBase.t.sol";
 
 contract MarketViewsTest is MarketTestBase {
     function test_GetGlobalStats_ReflectsOrderAndNodeState() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         _placeDefaultOrder(user1, 1);
 
         (
@@ -97,7 +97,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetOrderFinancials_ReturnsAssignedNodes() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -114,7 +114,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetFinancialStats_UpdatesAfterRewardClaim() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, 256, 1, 1, 1e12);
 
         vm.prank(node1);
@@ -132,7 +132,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetProofSystemStats_SlotCounts() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -159,7 +159,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetSlotInfo_ReturnsCorrectData() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -178,7 +178,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetAllSlotInfo_ReturnsAllSlots() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -203,7 +203,7 @@ contract MarketViewsTest is MarketTestBase {
     }
 
     function test_GetNodeChallengeStatus_ReflectsActiveChallenge() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);

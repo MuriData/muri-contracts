@@ -5,7 +5,7 @@ import {MarketTestBase, BaseRevertingReceiver} from "./MarketBase.t.sol";
 
 contract MarketRewardsAccountingTest is MarketTestBase {
     function test_ClaimRewards_AfterOnePeriod() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, 1024, 1, 1, 1e12);
 
         vm.prank(node1);
@@ -29,7 +29,7 @@ contract MarketRewardsAccountingTest is MarketTestBase {
     }
 
     function test_CancelOrder_WithEligibleNode_AppliesPenalty() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
+        _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeDefaultOrder(user1, 1);
 
         vm.prank(node1);
@@ -87,8 +87,8 @@ contract MarketRewardsAccountingTest is MarketTestBase {
     }
 
     function test_ClaimReporterRewards_AfterSlotExpiry() public {
-        _stakeDefaultNode(node1, 0x1234, 0x5678);
-        _stakeDefaultNode(node2, 0xABCD, 0xEF01);
+        _stakeDefaultNode(node1, 0x1234);
+        _stakeDefaultNode(node2, 0xABCD);
 
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
         vm.prank(node1);

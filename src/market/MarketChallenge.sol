@@ -31,10 +31,10 @@ abstract contract MarketChallenge is MarketAccounting {
         FileOrder storage order = orders[slot.orderId];
         uint256 fileRootHash = order.file.root;
 
-        (,,, uint256 publicKeyX, uint256 publicKeyY) = nodeStaking.getNodeInfo(msg.sender);
-        require(publicKeyX != 0 && publicKeyY != 0, "node public key not set");
+        (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
+        require(publicKey != 0, "node public key not set");
 
-        uint256[5] memory publicInputs = [uint256(_commitment), slot.randomness, publicKeyX, publicKeyY, fileRootHash];
+        uint256[4] memory publicInputs = [uint256(_commitment), slot.randomness, publicKey, fileRootHash];
 
         poiVerifier.verifyProof(_proof, publicInputs);
 
@@ -193,7 +193,7 @@ abstract contract MarketChallenge is MarketAccounting {
             uint256 slashAmount = PROOF_FAILURE_SLASH_BYTES * nodeStaking.STAKE_PER_BYTE();
 
             if (nodeStaking.isValidNode(failedNode)) {
-                (uint256 nodeStake,,,,) = nodeStaking.getNodeInfo(failedNode);
+                (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
                 if (slashAmount > nodeStake) {
                     slashAmount = nodeStake;
                 }
