@@ -92,6 +92,8 @@ abstract contract MarketChallenge is MarketAccounting {
     }
 
     /// @notice Advance a slot to challenge a new random order/node.
+    /// Prefers unchallenged order+node pairs for coverage diversity, but falls back
+    /// to already-challenged pairs when no fresh alternatives exist.
     /// @return success True if a valid order+node was found and the slot was activated.
     function _advanceSlot(uint256 _slotIndex, uint256 _randomness) internal returns (bool success) {
         ChallengeSlot storage slot = challengeSlots[_slotIndex];
@@ -112,6 +114,9 @@ abstract contract MarketChallenge is MarketAccounting {
         uint256 nonce = 0;
         uint256 probes = 0;
         uint256 evictions = 0;
+        uint256 dedupProbes = 0;
+        uint256 fallbackOrderId = 0;
+        address fallbackNode = address(0);
 
         while (probes < MAX_CHALLENGE_SELECTION_PROBES && len > 0) {
             uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, nonce))) % len;
@@ -129,33 +134,80 @@ abstract contract MarketChallenge is MarketAccounting {
                 continue;
             }
 
-            // Found a valid order — select a random node from it
+            // Found a valid order — select a node preferring unchallenged ones
             address[] storage nodes = orderToNodes[candidateOrderId];
             if (nodes.length == 0) continue;
 
-            uint256 nodeIdx = uint256(keccak256(abi.encodePacked(_randomness, candidateOrderId, nonce))) % nodes.length;
-            address selectedNode = nodes[nodeIdx];
+            address selectedNode = _selectUnchallengedNode(nodes, _randomness, candidateOrderId, nonce);
 
-            // Set slot state.
-            // Randomness must be non-zero — the ZK circuit multiplies chunk data by
-            // randomness, so zero collapses message hash to a constant for all chunks.
-            uint256 safeRandomness = _randomness == 0 ? 1 : _randomness;
-            slot.orderId = candidateOrderId;
-            slot.challengedNode = selectedNode;
-            slot.randomness = safeRandomness;
-            slot.deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS;
+            // Ideal: fully fresh pair — commit immediately
+            if (orderActiveChallengeCount[candidateOrderId] == 0 && nodeActiveChallengeCount[selectedNode] == 0) {
+                _commitSlot(slot, _slotIndex, candidateOrderId, selectedNode, _randomness);
+                return true;
+            }
 
-            // Increment counters
-            nodeActiveChallengeCount[selectedNode]++;
-            orderActiveChallengeCount[candidateOrderId]++;
+            // Save first valid-but-duplicate pair as fallback
+            if (fallbackOrderId == 0) {
+                fallbackOrderId = candidateOrderId;
+                fallbackNode = selectedNode;
+            }
 
-            emit SlotChallengeIssued(_slotIndex, candidateOrderId, selectedNode, slot.deadlineBlock);
+            // Once we have a fallback, only spend a bounded budget looking for a fresh pair
+            if (fallbackOrderId != 0) {
+                dedupProbes++;
+                if (dedupProbes >= MAX_DEDUP_PROBES) break;
+            }
+        }
+
+        // No fresh pair found — use fallback if available
+        if (fallbackOrderId != 0) {
+            _commitSlot(slot, _slotIndex, fallbackOrderId, fallbackNode, _randomness);
             return true;
         }
 
         // No valid orders found — deactivate slot
         _deactivateSlot(_slotIndex);
         return false;
+    }
+
+    /// @notice Select a node from an order's node list, preferring nodes not already under challenge.
+    /// @dev Bounded by MAX_REPLICAS (10) — at most 1 + 10 SLOADs for the linear scan.
+    function _selectUnchallengedNode(
+        address[] storage _nodes,
+        uint256 _randomness,
+        uint256 _orderId,
+        uint256 _nonce
+    ) internal view returns (address) {
+        uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _nodes.length;
+        address candidate = _nodes[idx];
+        if (nodeActiveChallengeCount[candidate] == 0) return candidate;
+        // Linear scan for an unchallenged node (bounded by MAX_REPLICAS = 10)
+        for (uint256 i = 0; i < _nodes.length; i++) {
+            if (nodeActiveChallengeCount[_nodes[i]] == 0) return _nodes[i];
+        }
+        return candidate; // all challenged — fall back to random pick
+    }
+
+    /// @notice Commit a challenge slot: write state, increment counters, emit event.
+    function _commitSlot(
+        ChallengeSlot storage _slot,
+        uint256 _slotIndex,
+        uint256 _orderId,
+        address _node,
+        uint256 _randomness
+    ) internal {
+        // Randomness must be non-zero — the ZK circuit multiplies chunk data by
+        // randomness, so zero collapses message hash to a constant for all chunks.
+        uint256 safeRandomness = _randomness == 0 ? 1 : _randomness;
+        _slot.orderId = _orderId;
+        _slot.challengedNode = _node;
+        _slot.randomness = safeRandomness;
+        _slot.deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS;
+
+        nodeActiveChallengeCount[_node]++;
+        orderActiveChallengeCount[_orderId]++;
+
+        emit SlotChallengeIssued(_slotIndex, _orderId, _node, _slot.deadlineBlock);
     }
 
     /// @notice Deactivate a slot (set orderId = 0)
@@ -201,7 +253,7 @@ abstract contract MarketChallenge is MarketAccounting {
                 if (slashAmount > 0) {
                     (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(failedNode, slashAmount);
                     _distributeSlashFunds(_reporter, failedNode, totalSlashed);
-                    if (forcedExit && forcedExitCount < MAX_FORCED_EXITS_PER_SWEEP) {
+                    if (forcedExit) {
                         _handleForcedOrderExits(failedNode);
                         forcedExitCount++;
                     }

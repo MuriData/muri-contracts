@@ -574,8 +574,10 @@ abstract contract MarketOrders is MarketAdmin {
             delete nodeOrderStartTimestamp[node][_orderId];
             delete nodeOrderEarnings[_orderId][node];
 
-            (,, uint64 used,) = nodeStaking.getNodeInfo(node);
-            nodeStaking.updateNodeUsed(node, used - order.maxSize);
+            if (nodeStaking.isValidNode(node)) {
+                (,, uint64 used,) = nodeStaking.getNodeInfo(node);
+                nodeStaking.updateNodeUsed(node, used - order.maxSize);
+            }
 
             assignedNodes.pop();
             if (order.filled > 0) {

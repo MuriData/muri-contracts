@@ -14,6 +14,7 @@ abstract contract MarketStorage {
     uint256 internal constant CLEANUP_BATCH_SIZE = 10; // expired orders processed per cleanup call
     uint256 internal constant CLEANUP_SCAN_CAP = 50; // max entries scanned per _cleanupExpiredOrders call
     uint256 internal constant MAX_CHALLENGE_SELECTION_PROBES = 200; // cap non-eviction probes in challenge selection
+    uint256 internal constant MAX_DEDUP_PROBES = 10; // extra probes after first valid candidate to find a fresh pair
     uint256 internal constant MAX_CHALLENGE_EVICTIONS = 50; // max expired-order evictions per selection call
     uint256 internal immutable GENESIS_TS; // contract deploy timestamp
     address public owner;

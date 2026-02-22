@@ -160,6 +160,123 @@ contract MarketChallengeTest is MarketTestBase {
         assertGt(root_, 0, "order file root should not be zeroed");
     }
 
+    function test_ForcedExitCleanup_AllSlashedNodesDetachedAfterSweep() public {
+        // Three nodes with capacity == order maxSize, so any challenge slash
+        // triggers forcedExit (used 1024 > new capacity 524 after 500-byte slash).
+        _stakeDefaultNode(node1, 0x1111);
+        _stakeDefaultNode(node2, 0x2222);
+        _stakeDefaultNode(node3, 0x3333);
+
+        (uint256 order1,) = _placeDefaultOrder(user1, 1);
+        (uint256 order2,) = _placeDefaultOrder(user1, 1);
+        (uint256 order3,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(order1);
+        vm.prank(node2);
+        market.executeOrder(order2);
+        vm.prank(node3);
+        market.executeOrder(order3);
+
+        // Pre-check: every node has exactly 1 order assignment
+        assertEq(market.getNodeOrders(node1).length, 1);
+        assertEq(market.getNodeOrders(node2).length, 1);
+        assertEq(market.getNodeOrders(node3).length, 1);
+
+        // Fill challenge slots across the 3 order/node pairs
+        market.activateSlots();
+
+        // Expire all challenge deadlines
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+
+        // Sweep: slashes expired nodes, triggers forced exits, earns reporter rewards
+        vm.prank(user1);
+        market.processExpiredSlots();
+
+        // Invariant: every node that was slashed with forcedExit==true must have
+        // been fully detached from orders. A stale assignment here means
+        // _handleForcedOrderExits was skipped — the exact bug this fix addresses.
+        _assertDetachedIfSlashed(node1);
+        _assertDetachedIfSlashed(node2);
+        _assertDetachedIfSlashed(node3);
+    }
+
+    /// @dev Helper: if the node was slashed (capacity < TEST_CAPACITY) or removed,
+    ///      it must have no remaining order assignments.
+    function _assertDetachedIfSlashed(address _node) internal {
+        if (nodeStaking.isValidNode(_node)) {
+            (, uint64 cap,,) = nodeStaking.getNodeInfo(_node);
+            if (cap < TEST_CAPACITY) {
+                // Was slashed and force-exited — must be detached
+                assertEq(
+                    market.getNodeOrders(_node).length,
+                    0,
+                    "force-exited node still has stale order assignments"
+                );
+            }
+        } else {
+            // Node fully removed from staking — must be detached
+            assertEq(
+                market.getNodeOrders(_node).length,
+                0,
+                "removed node still has stale order assignments"
+            );
+        }
+    }
+
+    function test_AdvanceSlot_PrefersUnchallengedOrdersAndNodes() public {
+        // 3 nodes, 3 orders (1 replica each), each node executes a different order
+        // → 3 distinct (order, node) pairs available
+        _stakeDefaultNode(node1, 0x1111);
+        _stakeDefaultNode(node2, 0x2222);
+        _stakeDefaultNode(node3, 0x3333);
+
+        (uint256 order1,) = _placeDefaultOrder(user1, 1);
+        (uint256 order2,) = _placeDefaultOrder(user1, 1);
+        (uint256 order3,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(order1);
+        vm.prank(node2);
+        market.executeOrder(order2);
+        vm.prank(node3);
+        market.executeOrder(order3);
+
+        // Activate all 5 challenge slots from 3 pairs
+        market.activateSlots();
+
+        // Collect which orders and nodes were assigned across all 5 slots
+        bool hasOrder1;
+        bool hasOrder2;
+        bool hasOrder3;
+        bool hasNode1;
+        bool hasNode2;
+        bool hasNode3;
+
+        for (uint256 i = 0; i < 5; i++) {
+            (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(i);
+            // Every slot must be active (3 pairs available, 5 slots)
+            assertGt(slotOrderId, 0, "slot should be active");
+
+            if (slotOrderId == order1) hasOrder1 = true;
+            if (slotOrderId == order2) hasOrder2 = true;
+            if (slotOrderId == order3) hasOrder3 = true;
+            if (slotNode == node1) hasNode1 = true;
+            if (slotNode == node2) hasNode2 = true;
+            if (slotNode == node3) hasNode3 = true;
+        }
+
+        // All 3 orders must appear before any gets a second slot
+        assertTrue(hasOrder1, "order1 should be covered");
+        assertTrue(hasOrder2, "order2 should be covered");
+        assertTrue(hasOrder3, "order3 should be covered");
+
+        // All 3 nodes must appear before any gets a duplicate
+        assertTrue(hasNode1, "node1 should be covered");
+        assertTrue(hasNode2, "node2 should be covered");
+        assertTrue(hasNode3, "node3 should be covered");
+    }
+
     function test_SlotExpiry_SweepViaSubmitProof() public {
         // Two nodes, one order each
         _stakeDefaultNode(node1, 0x1234);
