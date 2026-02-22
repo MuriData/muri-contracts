@@ -208,19 +208,11 @@ contract MarketChallengeTest is MarketTestBase {
             (, uint64 cap,,) = nodeStaking.getNodeInfo(_node);
             if (cap < TEST_CAPACITY) {
                 // Was slashed and force-exited — must be detached
-                assertEq(
-                    market.getNodeOrders(_node).length,
-                    0,
-                    "force-exited node still has stale order assignments"
-                );
+                assertEq(market.getNodeOrders(_node).length, 0, "force-exited node still has stale order assignments");
             }
         } else {
             // Node fully removed from staking — must be detached
-            assertEq(
-                market.getNodeOrders(_node).length,
-                0,
-                "removed node still has stale order assignments"
-            );
+            assertEq(market.getNodeOrders(_node).length, 0, "removed node still has stale order assignments");
         }
     }
 

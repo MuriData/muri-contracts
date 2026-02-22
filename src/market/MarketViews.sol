@@ -228,7 +228,7 @@ abstract contract MarketViews is MarketChallenge {
         averageOrderValue = totalOrders > 0 ? lifetimeEscrowDeposited / totalOrders : 0;
 
         (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
-        totalStakeValue = totalCapacity * nodeStaking.STAKE_PER_BYTE();
+        totalStakeValue = totalCapacity * STAKE_PER_BYTE;
     }
 
     /// @notice Get order core details by ID

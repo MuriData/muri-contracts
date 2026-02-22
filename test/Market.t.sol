@@ -1830,16 +1830,15 @@ contract MarketTest is Test {
     uint256 constant ZK_PROOF_7 = 0x19ab439c0c556b13754e1b4f16651f94c3b8a5a462c54d409652c63b6f5357df;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
-    // challengeSlots[5] starts at slot 26, each ChallengeSlot = 4 words
+    // challengeSlots[5] starts at slot 26, each ChallengeSlot = 3 words (packed)
     // slot 26: challengeSlots[0].orderId
-    // slot 27: challengeSlots[0].challengedNode
+    // slot 27: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
     // slot 28: challengeSlots[0].randomness
-    // slot 29: challengeSlots[0].deadlineBlock
     uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 26;
-    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 46;
-    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 47;
-    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 48;
-    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 49;
+    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 41;
+    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 42;
+    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 43;
+    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 44;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;
@@ -1855,15 +1854,14 @@ contract MarketTest is Test {
     /// @dev Set up a challenge slot where `prover` is the challenged node for `orderId`,
     ///      with slot randomness = ZK_RANDOMNESS so the ZK proof fixture is valid.
     function _setupZKSlotChallenge(address prover, uint256 orderId) internal {
-        uint256 slotBase = SLOT_CHALLENGE_SLOTS_BASE; // slot 0
+        uint256 slotBase = SLOT_CHALLENGE_SLOTS_BASE; // slot 0 (3 words per ChallengeSlot)
         // Set challengeSlots[0].orderId
         vm.store(address(market), bytes32(slotBase), bytes32(orderId));
-        // Set challengeSlots[0].challengedNode
-        vm.store(address(market), bytes32(slotBase + 1), bytes32(uint256(uint160(prover))));
+        // Set challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes) packed in one word
+        uint256 packed = uint256(uint160(prover)) | (uint256(block.number + CHALLENGE_WINDOW_BLOCKS) << 160);
+        vm.store(address(market), bytes32(slotBase + 1), bytes32(packed));
         // Set challengeSlots[0].randomness = ZK_RANDOMNESS
         vm.store(address(market), bytes32(slotBase + 2), bytes32(ZK_RANDOMNESS));
-        // Set challengeSlots[0].deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS
-        vm.store(address(market), bytes32(slotBase + 3), bytes32(block.number + CHALLENGE_WINDOW_BLOCKS));
         // Mark challenge slots as initialized
         vm.store(address(market), bytes32(SLOT_CHALLENGE_SLOTS_INITIALIZED), bytes32(uint256(1)));
         // Set globalSeedRandomness to non-zero

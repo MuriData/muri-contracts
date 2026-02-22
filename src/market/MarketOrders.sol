@@ -7,7 +7,7 @@ import {MarketAdmin} from "./MarketAdmin.sol";
 abstract contract MarketOrders is MarketAdmin {
     // Place a new file storage order
     function placeOrder(
-        FileMeta memory _file,
+        FileMeta calldata _file,
         uint64 _maxSize,
         uint16 _periods,
         uint8 _replicas,
@@ -61,7 +61,8 @@ abstract contract MarketOrders is MarketAdmin {
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order expired");
         require(order.filled < order.replicas, "order already filled");
-        require(nodeStaking.hasCapacity(msg.sender, order.maxSize), "insufficient capacity");
+        uint64 maxSize = order.maxSize;
+        require(nodeStaking.hasCapacity(msg.sender, maxSize), "insufficient capacity");
 
         // Check if node is already assigned to this order
         address[] storage assignedNodes = orderToNodes[_orderId];
@@ -87,7 +88,7 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Update node's used capacity
         (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
-        nodeStaking.updateNodeUsed(msg.sender, used + order.maxSize);
+        nodeStaking.updateNodeUsed(msg.sender, used + maxSize);
 
         emit OrderFulfilled(_orderId, msg.sender);
 
@@ -152,71 +153,6 @@ abstract contract MarketOrders is MarketAdmin {
         return orderActiveChallengeCount[_orderId] > 0;
     }
 
-    // Internal random selection from a given array (shared logic for active and challengeable orders)
-    // Uses virtual Fisher-Yates: O(K) storage reads and O(K^2) memory ops instead of O(N).
-    function _selectFromArray(uint256[] storage arr, uint256 _randomSeed, uint256 _count)
-        internal
-        view
-        returns (uint256[] memory selectedOrders)
-    {
-        require(_count > 0, "count must be positive");
-
-        uint256 total = arr.length;
-        if (total == 0) {
-            return new uint256[](0);
-        }
-
-        uint256 actualCount = _count > total ? total : _count;
-        selectedOrders = new uint256[](actualCount);
-
-        // Always shuffle via virtual Fisher-Yates so the output ordering is
-        // randomised even when actualCount == total.  This prevents primary
-        // prover selection from being biased toward whichever order sits at
-        // index 0 of the storage array.
-        uint256[] memory mapKeys = new uint256[](actualCount);
-        uint256[] memory mapVals = new uint256[](actualCount);
-        uint256 mapLen = 0;
-
-        for (uint256 i = 0; i < actualCount; i++) {
-            uint256 j = (uint256(keccak256(abi.encodePacked(_randomSeed, i))) % (total - i)) + i;
-
-            // Lookup mapped value for j (unmapped positions map to themselves)
-            uint256 valJ = j;
-            for (uint256 k = 0; k < mapLen; k++) {
-                if (mapKeys[k] == j) {
-                    valJ = mapVals[k];
-                    break;
-                }
-            }
-
-            // Lookup mapped value for i
-            uint256 valI = i;
-            for (uint256 k = 0; k < mapLen; k++) {
-                if (mapKeys[k] == i) {
-                    valI = mapVals[k];
-                    break;
-                }
-            }
-
-            selectedOrders[i] = arr[valJ];
-
-            // Record swap: map[j] = valI
-            bool found = false;
-            for (uint256 k = 0; k < mapLen; k++) {
-                if (mapKeys[k] == j) {
-                    mapVals[k] = valI;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                mapKeys[mapLen] = j;
-                mapVals[mapLen] = valI;
-                mapLen++;
-            }
-        }
-    }
-
     // Get active orders count
     function getActiveOrdersCount() external view returns (uint256) {
         return activeOrders.length;
@@ -257,9 +193,9 @@ abstract contract MarketOrders is MarketAdmin {
 
     // Complete expired orders and free up node capacity
     function completeExpiredOrder(uint256 _orderId) external nonReentrant {
-        require(isOrderExpired(_orderId), "order not expired");
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
+        require(currentPeriod() >= uint256(order.startPeriod) + uint256(order.periods), "order not expired");
         require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
         uint256 settlePeriod = order.startPeriod + order.periods;
@@ -267,12 +203,14 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Remove from active orders and clean up
         _removeFromActiveOrders(_orderId);
-        uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
+        uint256 escrow = order.escrow;
+        uint256 withdrawn = orderEscrowWithdrawn[_orderId];
+        uint256 refundAmount = escrow - withdrawn;
         address orderOwner = order.owner;
 
         // Update aggregates before delete zeroes the struct
-        aggregateActiveEscrow -= order.escrow;
-        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+        aggregateActiveEscrow -= escrow;
+        aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
         delete orderToNodes[_orderId];
@@ -290,7 +228,7 @@ abstract contract MarketOrders is MarketAdmin {
     function cancelOrder(uint256 _orderId) external nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner == msg.sender, "not order owner");
-        require(!isOrderExpired(_orderId), "order already expired");
+        require(currentPeriod() < uint256(order.startPeriod) + uint256(order.periods), "order already expired");
         require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
         // Snapshot assigned nodes before settlement empties the array
@@ -316,7 +254,9 @@ abstract contract MarketOrders is MarketAdmin {
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Clean up order data
-        uint256 remainingEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
+        uint256 escrow = order.escrow;
+        uint256 withdrawn = orderEscrowWithdrawn[_orderId];
+        uint256 remainingEscrow = escrow - withdrawn;
         uint256 refundAmount = remainingEscrow;
         if (eligibleCount > 0 && remainingEscrow > 0) {
             uint256 penalty = remainingEscrow / 10; // 10% penalty
@@ -332,8 +272,8 @@ abstract contract MarketOrders is MarketAdmin {
         _removeFromActiveOrders(_orderId);
 
         // Update aggregates before delete zeroes the struct
-        aggregateActiveEscrow -= order.escrow;
-        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+        aggregateActiveEscrow -= escrow;
+        aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
         delete orderToNodes[_orderId];
@@ -351,7 +291,7 @@ abstract contract MarketOrders is MarketAdmin {
     function quitOrder(uint256 _orderId) external nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
-        require(!isOrderExpired(_orderId), "order already expired");
+        require(currentPeriod() < uint256(order.startPeriod) + uint256(order.periods), "order already expired");
         require(!_isUnresolvedProver(msg.sender), "active prover cannot quit");
 
         // Verify node is assigned to this order
@@ -381,9 +321,8 @@ abstract contract MarketOrders is MarketAdmin {
         }
         require(usedBeforeQuit >= order.maxSize, "invalid node usage");
 
-        uint256 stakePerByte = nodeStaking.STAKE_PER_BYTE();
         uint64 usedAfterQuit = usedBeforeQuit - order.maxSize;
-        uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * stakePerByte;
+        uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * STAKE_PER_BYTE;
         uint256 maxSafeSlash = nodeStake > requiredStakeAfterQuit ? nodeStake - requiredStakeAfterQuit : 0;
         require(slashAmount <= maxSafeSlash, "insufficient collateral for quit slash");
 
@@ -457,13 +396,12 @@ abstract contract MarketOrders is MarketAdmin {
             nodeStaking.forceReduceUsed(_node, newUsed);
         }
 
-        // Resize the exited orders array to actual count
-        uint256[] memory actualExitedOrders = new uint256[](exitCount);
-        for (uint256 idx = 0; idx < exitCount; idx++) {
-            actualExitedOrders[idx] = exitedOrders[idx];
+        // Resize the exited orders array to actual count (same pattern as cancelOrder)
+        assembly {
+            mstore(exitedOrders, exitCount)
         }
 
-        emit ForcedOrderExits(_node, actualExitedOrders, totalFreed);
+        emit ForcedOrderExits(_node, exitedOrders, totalFreed);
     }
 
     function _removeAssignmentDuringForcedExit(address _node, uint256 _orderId, uint256 _settlePeriod)
@@ -512,6 +450,7 @@ abstract contract MarketOrders is MarketAdmin {
         FileOrder storage order = orders[_orderId];
         address[] storage assignedNodes = orderToNodes[_orderId];
         uint256 settlePeriod = currentPeriod();
+        uint64 orderMaxSize = order.maxSize;
 
         uint256 settledReward = _settleOrderReward(_node, _orderId, settlePeriod);
         if (settledReward > 0) {
@@ -538,7 +477,7 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Free up node capacity
         (,, uint64 used,) = nodeStaking.getNodeInfo(_node);
-        nodeStaking.updateNodeUsed(_node, used - order.maxSize);
+        nodeStaking.updateNodeUsed(_node, used - orderMaxSize);
 
         // Remove order from node's order list
         _removeOrderFromNode(_node, _orderId);
@@ -574,8 +513,8 @@ abstract contract MarketOrders is MarketAdmin {
             delete nodeOrderStartTimestamp[node][_orderId];
             delete nodeOrderEarnings[_orderId][node];
 
-            if (nodeStaking.isValidNode(node)) {
-                (,, uint64 used,) = nodeStaking.getNodeInfo(node);
+            (, uint64 capacity, uint64 used,) = nodeStaking.getNodeInfo(node);
+            if (capacity > 0) {
                 nodeStaking.updateNodeUsed(node, used - order.maxSize);
             }
 

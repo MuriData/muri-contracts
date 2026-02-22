@@ -40,10 +40,10 @@ abstract contract MarketStorage {
 
     // --- Challenge slot struct for parallel event-driven challenges ---
     struct ChallengeSlot {
-        uint256 orderId; // order being challenged (0 = idle)
-        address challengedNode; // node that must submit proof
-        uint256 randomness; // per-slot randomness for proof verification
-        uint256 deadlineBlock; // block.number deadline
+        uint256 orderId; // order being challenged (0 = idle)        — Slot 0
+        address challengedNode; // node that must submit proof       — Slot 1 (20 bytes)
+        uint64 deadlineBlock; // block.number deadline               — Slot 1 (packed, +8 bytes)
+        uint256 randomness; // per-slot randomness for proof verification — Slot 2
     }
 
     // Staking contract for managing node stakes and capacity
@@ -93,6 +93,7 @@ abstract contract MarketStorage {
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
+    uint256 internal constant STAKE_PER_BYTE = 10 ** 14; // mirrors NodeStaking.STAKE_PER_BYTE
 
     ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
     bool public challengeSlotsInitialized;

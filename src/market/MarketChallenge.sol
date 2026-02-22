@@ -23,18 +23,20 @@ abstract contract MarketChallenge is MarketAccounting {
 
         // Phase 2: validate this slot is active and caller is the challenged node
         ChallengeSlot storage slot = challengeSlots[_slotIndex];
-        require(slot.orderId != 0, "slot is idle");
+        uint256 slotOrderId = slot.orderId;
+        require(slotOrderId != 0, "slot is idle");
         require(slot.challengedNode == msg.sender, "not the challenged node");
         require(block.number <= slot.deadlineBlock, "slot deadline passed");
 
         // Phase 3: verify ZK proof
-        FileOrder storage order = orders[slot.orderId];
+        FileOrder storage order = orders[slotOrderId];
         uint256 fileRootHash = order.file.root;
 
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
 
-        uint256[4] memory publicInputs = [uint256(_commitment), slot.randomness, publicKey, fileRootHash];
+        uint256 slotRandomness = slot.randomness;
+        uint256[4] memory publicInputs = [uint256(_commitment), slotRandomness, publicKey, fileRootHash];
 
         poiVerifier.verifyProof(_proof, publicInputs);
 
@@ -172,12 +174,11 @@ abstract contract MarketChallenge is MarketAccounting {
 
     /// @notice Select a node from an order's node list, preferring nodes not already under challenge.
     /// @dev Bounded by MAX_REPLICAS (10) — at most 1 + 10 SLOADs for the linear scan.
-    function _selectUnchallengedNode(
-        address[] storage _nodes,
-        uint256 _randomness,
-        uint256 _orderId,
-        uint256 _nonce
-    ) internal view returns (address) {
+    function _selectUnchallengedNode(address[] storage _nodes, uint256 _randomness, uint256 _orderId, uint256 _nonce)
+        internal
+        view
+        returns (address)
+    {
         uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _nodes.length;
         address candidate = _nodes[idx];
         if (nodeActiveChallengeCount[candidate] == 0) return candidate;
@@ -199,15 +200,16 @@ abstract contract MarketChallenge is MarketAccounting {
         // Randomness must be non-zero — the ZK circuit multiplies chunk data by
         // randomness, so zero collapses message hash to a constant for all chunks.
         uint256 safeRandomness = _randomness == 0 ? 1 : _randomness;
+        uint64 deadline = uint64(block.number + CHALLENGE_WINDOW_BLOCKS);
         _slot.orderId = _orderId;
         _slot.challengedNode = _node;
+        _slot.deadlineBlock = deadline;
         _slot.randomness = safeRandomness;
-        _slot.deadlineBlock = block.number + CHALLENGE_WINDOW_BLOCKS;
 
         nodeActiveChallengeCount[_node]++;
         orderActiveChallengeCount[_orderId]++;
 
-        emit SlotChallengeIssued(_slotIndex, _orderId, _node, _slot.deadlineBlock);
+        emit SlotChallengeIssued(_slotIndex, _orderId, _node, deadline);
     }
 
     /// @notice Deactivate a slot (set orderId = 0)
@@ -242,7 +244,7 @@ abstract contract MarketChallenge is MarketAccounting {
             address failedNode = slot.challengedNode;
 
             // Slash the failed node
-            uint256 slashAmount = PROOF_FAILURE_SLASH_BYTES * nodeStaking.STAKE_PER_BYTE();
+            uint256 slashAmount = PROOF_FAILURE_SLASH_BYTES * STAKE_PER_BYTE;
 
             if (nodeStaking.isValidNode(failedNode)) {
                 (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
@@ -329,11 +331,13 @@ abstract contract MarketChallenge is MarketAccounting {
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         _removeFromActiveOrders(_orderId);
-        uint256 refundAmount = order.escrow - orderEscrowWithdrawn[_orderId];
+        uint256 escrow = order.escrow;
+        uint256 withdrawn = orderEscrowWithdrawn[_orderId];
+        uint256 refundAmount = escrow - withdrawn;
         address orderOwner = order.owner;
 
-        aggregateActiveEscrow -= order.escrow;
-        aggregateActiveWithdrawn -= orderEscrowWithdrawn[_orderId];
+        aggregateActiveEscrow -= escrow;
+        aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
         delete orderToNodes[_orderId];
