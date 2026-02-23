@@ -30,6 +30,7 @@ contract NodeStaking {
     mapping(address => NodeInfo) public nodes;
     address[] public nodeList; // List of all registered node addresses
     mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
+    mapping(uint256 => address) public publicKeyOwner; // enforces unique ZK identity keys
     uint256 public constant STAKE_PER_BYTE = 10 ** 14; // configurable
 
     /// @dev BN254 scalar field order (Fr). Public key must be a valid field element.
@@ -73,6 +74,7 @@ contract NodeStaking {
     function stakeNode(uint64 _capacity, uint256 _publicKey) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
         require(_publicKey != 0 && _publicKey < SNARK_SCALAR_FIELD, "public key not in field");
+        require(publicKeyOwner[_publicKey] == address(0), "public key already registered");
 
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
@@ -84,6 +86,7 @@ contract NodeStaking {
         info.capacity = _capacity;
         info.used = 0;
         info.publicKey = _publicKey;
+        publicKeyOwner[_publicKey] = msg.sender;
 
         // Add to node list for tracking
         nodeIndexInList[msg.sender] = nodeList.length;
@@ -150,6 +153,7 @@ contract NodeStaking {
             }
             nodeList.pop();
             delete nodeIndexInList[msg.sender];
+            delete publicKeyOwner[info.publicKey];
             delete nodes[msg.sender];
         }
     }
@@ -165,6 +169,9 @@ contract NodeStaking {
 
         globalTotalCapacity -= info.capacity;
         // used == 0 per require above, no globalTotalUsed change
+
+        // Free the public key for reuse
+        delete publicKeyOwner[info.publicKey];
 
         // Remove node info mapping entry entirely
         delete nodes[msg.sender];
@@ -306,6 +313,7 @@ contract NodeStaking {
             }
             nodeList.pop();
             delete nodeIndexInList[node];
+            delete publicKeyOwner[info.publicKey];
             delete nodes[node];
         }
 

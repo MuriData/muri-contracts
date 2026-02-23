@@ -86,7 +86,7 @@ contract NodeStakingTest is Test {
 
         vm.prank(node1);
         vm.expectRevert("already staked");
-        nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
+        nodeStaking.stakeNode{value: requiredStake}(capacity, 0xBEEF);
     }
 
     // ===== CAPACITY INCREASE TESTS =====
@@ -397,6 +397,53 @@ contract NodeStakingTest is Test {
 
         (,,, uint256 pk) = nodeStaking.getNodeInfo(node1);
         assertEq(pk, R - 1);
+    }
+
+    // ===== PUBLIC KEY UNIQUENESS =====
+
+    function test_StakeNode_RevertDuplicatePublicKey() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 sharedKey = 0x1234;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, sharedKey);
+
+        vm.prank(node2);
+        vm.expectRevert("public key already registered");
+        nodeStaking.stakeNode{value: stake}(capacity, sharedKey);
+    }
+
+    function test_PublicKeyFreedAfterUnstake() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 key = 0x1234;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, key);
+
+        vm.prank(node1);
+        nodeStaking.unstakeNode();
+
+        // Another node can now use the same key
+        vm.prank(node2);
+        nodeStaking.stakeNode{value: stake}(capacity, key);
+        assertEq(nodeStaking.publicKeyOwner(key), node2);
+    }
+
+    function test_PublicKeyFreedAfterFullSlash() public {
+        uint64 capacity = 1000;
+        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 key = 0x1234;
+
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: stake}(capacity, key);
+
+        // Slash full stake (this test contract is the market)
+        nodeStaking.slashNode(node1, stake);
+
+        // Key is freed
+        assertEq(nodeStaking.publicKeyOwner(key), address(0));
     }
 
     // ===== DECREASE CAPACITY EDGE CASES =====
