@@ -10,7 +10,7 @@ The system is not production ready, but the current implementation demonstrates 
 
 - `FileMarket.sol` — manages orders, replica assignments, reward settlement, heartbeat challenges, and slashing orchestration.
 - `NodeStaking.sol` — tracks node stake, capacity, and usage; exposes slash and capacity adjustment hooks that only `FileMarket` can call.
-- `poi_verifier.sol` (imported as `Verifier`) — zk-proof verifier used during challenge rounds to validate integrity proofs.
+- `poi_verifier.sol` (imported as `Verifier`) — Groth16 zk-proof verifier used during challenge rounds to validate multi-leaf integrity proofs (8 parallel Merkle openings per proof).
 
 Both contracts are deployed together; `FileMarket` instantiates `NodeStaking` in its constructor and becomes its sole privileged caller.
 
