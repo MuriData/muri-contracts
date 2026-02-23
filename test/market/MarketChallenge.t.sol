@@ -269,6 +269,95 @@ contract MarketChallengeTest is MarketTestBase {
         assertTrue(hasNode3, "node3 should be covered");
     }
 
+    function test_ProofFailureSlash_ScalesWithOrderValue() public {
+        // 1 MB order at 1e12 price → orderPeriodCost = 1_048_576 * 1e12 = ~1.05 ETH
+        // This exceeds the 0.05 ETH floor, so per-slot slash = orderPeriodCost
+        // Use 2x capacity so no forced exits occur from the 5 simultaneous slot slashes
+        uint64 largeSize = 1_048_576; // 1 MB
+        uint256 price = 1e12;
+        uint64 nodeCapacity = 2_097_152; // 2 MB — avoids forced exit
+        uint256 orderPeriodCost = uint256(largeSize) * price;
+        uint256 floor = 500 * STAKE_PER_BYTE;
+
+        uint256 nodeStake = uint256(nodeCapacity) * STAKE_PER_BYTE;
+        vm.deal(node1, nodeStake + 10 ether);
+        vm.prank(node1);
+        nodeStaking.stakeNode{value: nodeStake}(nodeCapacity, 0x1234);
+
+        (uint256 orderId,) = _placeOrder(user1, largeSize, 4, 1, price);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
+
+        // Expire all 5 challenge slots
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+
+        vm.prank(user2);
+        market.processExpiredSlots();
+
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
+        uint256 actualSlash = stakeBefore - stakeAfter;
+
+        // All 5 slots target the same node → total = 5 * orderPeriodCost
+        assertEq(actualSlash, 5 * orderPeriodCost, "slash should scale with order value");
+        assertGt(actualSlash, 5 * floor, "total slash should exceed 5x floor");
+    }
+
+    function test_ProofFailureSlash_FloorForSmallOrders() public {
+        // Default order: 1024 bytes at 1e12 → orderPeriodCost = 1.024e15 < floor (5e16)
+        // Per-slot slash = floor. Use large capacity so node survives all 5 slashes.
+        uint64 nodeCapacity = 10000; // stake = 1e18, easily covers 5 * floor = 2.5e17
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
+
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+
+        vm.prank(user2);
+        market.processExpiredSlots();
+
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
+        uint256 actualSlash = stakeBefore - stakeAfter;
+
+        uint256 floor = 500 * STAKE_PER_BYTE; // 0.05 ETH
+        // All 5 slots target the same node → total = 5 * floor
+        assertEq(actualSlash, 5 * floor, "small order slash should equal 5x floor");
+    }
+
+    function test_ProofFailureSlash_CappedByNodeStake() public {
+        // orderPeriodCost > nodeStake → first slot caps to full stake, node removed,
+        // remaining slots find node invalid and skip. Total slash = initial stake.
+        uint64 orderSize = 1024;
+        uint256 highPrice = 1e15; // 10x STAKE_PER_BYTE → orderPeriodCost = 1.024e18 > stake 1.024e17
+
+        _stakeDefaultNode(node1, 0x1234); // capacity = 1024, stake = 1.024e17
+
+        (uint256 orderId,) = _placeOrder(user1, orderSize, 4, 1, highPrice);
+
+        vm.prank(node1);
+        market.executeOrder(orderId);
+
+        market.activateSlots();
+
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+
+        vm.prank(user2);
+        market.processExpiredSlots();
+
+        // Node should be fully removed (capacity == 0)
+        assertFalse(nodeStaking.isValidNode(node1), "node should be removed after full slash");
+    }
+
     function test_SlotExpiry_SweepViaSubmitProof() public {
         // Two nodes, one order each
         _stakeDefaultNode(node1, 0x1234);

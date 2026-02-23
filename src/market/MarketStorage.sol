@@ -96,7 +96,7 @@ abstract contract MarketStorage {
     // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
     uint256 public constant NUM_CHALLENGE_SLOTS = 5;
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
-    uint256 public constant PROOF_FAILURE_SLASH_BYTES = 500; // uniform slash amount in bytes
+    uint256 public constant MIN_PROOF_FAILURE_SLASH = 500 * STAKE_PER_BYTE; // 0.05 ETH floor for proof-failure slash
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
