@@ -1830,15 +1830,15 @@ contract MarketTest is Test {
     uint256 constant ZK_PROOF_7 = 0x19ab439c0c556b13754e1b4f16651f94c3b8a5a462c54d409652c63b6f5357df;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
-    // challengeSlots[5] starts at slot 26, each ChallengeSlot = 3 words (packed)
-    // slot 26: challengeSlots[0].orderId
-    // slot 27: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
-    // slot 28: challengeSlots[0].randomness
-    uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 26;
-    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 41;
-    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 42;
-    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 43;
-    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 44;
+    // challengeSlots[5] starts at slot 27, each ChallengeSlot = 3 words (packed)
+    // slot 27: challengeSlots[0].orderId
+    // slot 28: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
+    // slot 29: challengeSlots[0].randomness
+    uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 27;
+    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 42;
+    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 43;
+    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 44;
+    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 45;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;

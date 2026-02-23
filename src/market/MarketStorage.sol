@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
+import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 import {NodeStaking} from "../NodeStaking.sol";
 
 /// @notice Shared storage, constants, modifiers, and events for FileMarket modules.
@@ -52,6 +53,9 @@ abstract contract MarketStorage {
     // Proof of Integrity verifier contract
     Verifier public immutable poiVerifier;
 
+    // Key leak PLONK verifier contract
+    KeyLeakVerifier public immutable keyleakVerifier;
+
     // Order management
     uint256 public nextOrderId = 1;
     mapping(uint256 => FileOrder) public orders;
@@ -85,6 +89,9 @@ abstract contract MarketStorage {
     uint256 public totalSlashedReceived;
     uint256 public totalBurnedFromSlash;
     uint256 public totalReporterRewards;
+
+    // Key leak tracking
+    mapping(address => bool) public keyCompromised;
 
     // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
     uint256 public constant NUM_CHALLENGE_SLOTS = 5;
@@ -137,6 +144,7 @@ abstract contract MarketStorage {
     event RefundQueued(address indexed recipient, uint256 amount);
     event RefundWithdrawn(address indexed recipient, uint256 amount);
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
+    event KeyLeakReported(address indexed node, address indexed reporter, uint256 slashAmount);
 
     // Challenge slot events
     event SlotChallengeIssued(
@@ -153,6 +161,7 @@ abstract contract MarketStorage {
         owner = msg.sender;
         nodeStaking = new NodeStaking(address(this));
         poiVerifier = new Verifier();
+        keyleakVerifier = new KeyLeakVerifier();
     }
 
     modifier onlyOwner() {

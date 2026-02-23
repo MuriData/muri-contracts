@@ -93,6 +93,37 @@ abstract contract MarketChallenge is MarketAccounting {
         }
     }
 
+    /// @notice Report a compromised node key. Anyone who knows the node's secret key
+    /// can submit a PLONK proof that H(sk) == pk, slashing the node's full stake.
+    /// The proof binds to msg.sender as reporterAddress, preventing front-running.
+    function reportKeyLeak(address _node, bytes calldata _proof) external nonReentrant {
+        require(!keyCompromised[_node], "key already reported");
+        require(nodeStaking.isValidNode(_node), "not a valid node");
+
+        (uint256 nodeStake,,, uint256 publicKey) = nodeStaking.getNodeInfo(_node);
+        require(publicKey != 0, "node public key not set");
+        require(nodeStake > 0, "node has no stake");
+
+        // Verify PLONK proof: public inputs = [publicKey, reporterAddress]
+        // reporterAddress = msg.sender — binds proof to caller, preventing front-running
+        uint256[] memory publicInputs = new uint256[](2);
+        publicInputs[0] = publicKey;
+        publicInputs[1] = uint256(uint160(msg.sender));
+        require(keyleakVerifier.Verify(_proof, publicInputs), "invalid keyleak proof");
+
+        keyCompromised[_node] = true;
+
+        // Slash full stake — compromised key means node can no longer prove data integrity
+        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, nodeStake);
+        _distributeSlashFunds(msg.sender, _node, totalSlashed);
+
+        if (forcedExit) {
+            _handleForcedOrderExits(_node);
+        }
+
+        emit KeyLeakReported(_node, msg.sender, totalSlashed);
+    }
+
     /// @notice Advance a slot to challenge a new random order/node.
     /// Prefers unchallenged order+node pairs for coverage diversity, but falls back
     /// to already-challenged pairs when no fresh alternatives exist.

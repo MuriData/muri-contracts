@@ -231,6 +231,11 @@ abstract contract MarketViews is MarketChallenge {
         totalStakeValue = totalCapacity * STAKE_PER_BYTE;
     }
 
+    /// @notice Check if a node's key has been reported as compromised
+    function isKeyCompromised(address _node) external view returns (bool) {
+        return keyCompromised[_node];
+    }
+
     /// @notice Get order core details by ID
     function getOrderDetails(uint256 _orderId)
         external
