@@ -96,6 +96,17 @@ abstract contract MarketStorage {
 
     // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
     uint256 public constant NUM_CHALLENGE_SLOTS = 5;
+    // Timing budget (Avalanche C-Chain, ~2s/block):
+    //   50 blocks = ~100 seconds
+    //   - Event detection: ~2-4s (1-2 blocks)
+    //   - Witness preparation: <1s (precomputed SMT + parallel hashing)
+    //   - Groth16 proving (CPU): ~5-10s
+    //   - Groth16 proving (GPU): ~1-2s (icicle-gnark)
+    //   - Transaction submission + confirmation: ~4-6s (2-3 blocks)
+    //   - Safety margin: ~78-88s
+    //
+    // For larger files or slower hardware, consider increasing this value.
+    // GPU-accelerated proving (icicle-gnark) reduces proving to ~1-2s.
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
     uint256 public constant MIN_PROOF_FAILURE_SLASH = 500 * STAKE_PER_BYTE; // 0.05 ETH floor for proof-failure slash
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
