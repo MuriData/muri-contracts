@@ -27,6 +27,7 @@ abstract contract MarketChallenge is MarketAccounting {
         require(slotOrderId != 0, "slot is idle");
         require(slot.challengedNode == msg.sender, "not the challenged node");
         require(block.number <= slot.deadlineBlock, "slot deadline passed");
+        require(compromiseReportedBlock[msg.sender] == 0, "key compromise self-reported");
 
         // Phase 3: verify ZK proof
         FileOrder storage order = orders[slotOrderId];
@@ -98,6 +99,8 @@ abstract contract MarketChallenge is MarketAccounting {
     /// The proof binds to msg.sender as reporterAddress, preventing front-running.
     function reportKeyLeak(address _node, bytes calldata _proof) external nonReentrant {
         require(!keyCompromised[_node], "key already reported");
+        uint256 reportedBlock = compromiseReportedBlock[_node];
+        require(reportedBlock == 0 || block.number <= reportedBlock + CHALLENGE_WINDOW_BLOCKS, "key compromise self-reported");
         require(nodeStaking.isValidNode(_node), "not a valid node");
 
         (uint256 nodeStake,,, uint256 publicKey) = nodeStaking.getNodeInfo(_node);
