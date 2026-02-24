@@ -273,13 +273,13 @@ contract MarketChallengeTest is MarketTestBase {
         // 1 MB order at 1e12 price → orderPeriodCost = 1_048_576 * 1e12 = ~1.05 ETH
         // This exceeds the 0.05 ETH floor, so per-slot slash = orderPeriodCost
         // Use 2x capacity so no forced exits occur from the 5 simultaneous slot slashes
-        uint64 largeSize = 1_048_576; // 1 MB
+        uint32 largeSize = 1_048_576; // 1M chunks
         uint256 price = 1e12;
-        uint64 nodeCapacity = 2_097_152; // 2 MB — avoids forced exit
+        uint64 nodeCapacity = 2_097_152; // 2M chunks — avoids forced exit
         uint256 orderPeriodCost = uint256(largeSize) * price;
-        uint256 floor = 500 * STAKE_PER_BYTE;
+        uint256 floor = 500 * STAKE_PER_CHUNK;
 
-        uint256 nodeStake = uint256(nodeCapacity) * STAKE_PER_BYTE;
+        uint256 nodeStake = uint256(nodeCapacity) * STAKE_PER_CHUNK;
         vm.deal(node1, nodeStake + 10 ether);
         vm.prank(node1);
         nodeStaking.stakeNode{value: nodeStake}(nodeCapacity, 0x1234);
@@ -329,7 +329,7 @@ contract MarketChallengeTest is MarketTestBase {
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
 
-        uint256 floor = 500 * STAKE_PER_BYTE; // 0.05 ETH
+        uint256 floor = 500 * STAKE_PER_CHUNK; // 0.05 ETH
         // All 5 slots target the same node → total = 5 * floor
         assertEq(actualSlash, 5 * floor, "small order slash should equal 5x floor");
     }
@@ -337,8 +337,8 @@ contract MarketChallengeTest is MarketTestBase {
     function test_ProofFailureSlash_CappedByNodeStake() public {
         // orderPeriodCost > nodeStake → first slot caps to full stake, node removed,
         // remaining slots find node invalid and skip. Total slash = initial stake.
-        uint64 orderSize = 1024;
-        uint256 highPrice = 1e15; // 10x STAKE_PER_BYTE → orderPeriodCost = 1.024e18 > stake 1.024e17
+        uint32 orderSize = 1024;
+        uint256 highPrice = 1e15; // 10x STAKE_PER_CHUNK → orderPeriodCost = 1.024e18 > stake 1.024e17
 
         _stakeDefaultNode(node1, 0x1234); // capacity = 1024, stake = 1.024e17
 

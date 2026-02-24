@@ -126,7 +126,7 @@ abstract contract MarketViews is MarketChallenge {
         returns (
             uint256[] memory orderIds,
             address[] memory owners,
-            uint64[] memory sizes,
+            uint32[] memory numChunks,
             uint16[] memory periods,
             uint8[] memory replicas,
             uint8[] memory filled,
@@ -140,7 +140,7 @@ abstract contract MarketViews is MarketChallenge {
             return (
                 new uint256[](0),
                 new address[](0),
-                new uint64[](0),
+                new uint32[](0),
                 new uint16[](0),
                 new uint8[](0),
                 new uint8[](0),
@@ -151,7 +151,7 @@ abstract contract MarketViews is MarketChallenge {
 
         orderIds = new uint256[](returnCount);
         owners = new address[](returnCount);
-        sizes = new uint64[](returnCount);
+        numChunks = new uint32[](returnCount);
         periods = new uint16[](returnCount);
         replicas = new uint8[](returnCount);
         filled = new uint8[](returnCount);
@@ -166,7 +166,7 @@ abstract contract MarketViews is MarketChallenge {
 
             orderIds[idx] = orderId;
             owners[idx] = order.owner;
-            sizes[idx] = order.maxSize;
+            numChunks[idx] = order.numChunks;
             periods[idx] = order.periods;
             replicas[idx] = order.replicas;
             filled[idx] = order.filled;
@@ -228,7 +228,7 @@ abstract contract MarketViews is MarketChallenge {
         averageOrderValue = totalOrders > 0 ? lifetimeEscrowDeposited / totalOrders : 0;
 
         (, uint256 totalCapacity,) = nodeStaking.getNetworkStats();
-        totalStakeValue = totalCapacity * STAKE_PER_BYTE;
+        totalStakeValue = totalCapacity * STAKE_PER_CHUNK;
     }
 
     /// @notice Check if a node's key has been reported as compromised
@@ -244,7 +244,7 @@ abstract contract MarketViews is MarketChallenge {
             address owner_,
             string memory uri_,
             uint256 root_,
-            uint64 maxSize_,
+            uint32 numChunks_,
             uint16 periods_,
             uint8 replicas_,
             uint8 filled_
@@ -255,7 +255,7 @@ abstract contract MarketViews is MarketChallenge {
         owner_ = order.owner;
         uri_ = order.file.uri;
         root_ = order.file.root;
-        maxSize_ = order.maxSize;
+        numChunks_ = order.numChunks;
         periods_ = order.periods;
         replicas_ = order.replicas;
         filled_ = order.filled;

@@ -5,21 +5,26 @@ import {MarketAdmin} from "./MarketAdmin.sol";
 
 /// @notice Order lifecycle, assignment, settlement, and slashing mechanics.
 abstract contract MarketOrders is MarketAdmin {
-    // Place a new file storage order
+    // Place a new file storage order with ZK-verified file size
     function placeOrder(
         FileMeta calldata _file,
-        uint64 _maxSize,
+        uint32 _numChunks,
         uint16 _periods,
         uint8 _replicas,
-        uint256 _pricePerBytePerPeriod
+        uint256 _pricePerChunkPerPeriod,
+        uint256[8] calldata _fspProof
     ) external payable nonReentrant returns (uint256 orderId) {
         require(_file.root > 0 && _file.root < SNARK_SCALAR_FIELD, "root not in Fr");
-        require(_maxSize > 0, "invalid size");
+        require(_numChunks > 0, "invalid size");
         require(_periods > 0, "invalid periods");
         require(_replicas > 0 && _replicas <= MAX_REPLICAS, "invalid replicas");
-        require(_pricePerBytePerPeriod > 0, "invalid price");
+        require(_pricePerChunkPerPeriod > 0, "invalid price");
 
-        uint256 totalCost = uint256(_maxSize) * uint256(_periods) * _pricePerBytePerPeriod * uint256(_replicas);
+        // Verify file size proof: proves numChunks is the exact boundary in the SMT
+        uint256[2] memory fspInputs = [_file.root, uint256(_numChunks)];
+        fspVerifier.verifyProof(_fspProof, fspInputs);
+
+        uint256 totalCost = uint256(_numChunks) * uint256(_periods) * _pricePerChunkPerPeriod * uint256(_replicas);
         require(msg.value >= totalCost, "insufficient payment");
 
         orderId = nextOrderId++;
@@ -27,10 +32,10 @@ abstract contract MarketOrders is MarketAdmin {
         orders[orderId] = FileOrder({
             owner: msg.sender,
             file: _file,
-            maxSize: _maxSize,
+            numChunks: _numChunks,
             periods: _periods,
             replicas: _replicas,
-            price: _pricePerBytePerPeriod,
+            price: _pricePerChunkPerPeriod,
             filled: 0,
             startPeriod: uint64(currentPeriod()),
             escrow: totalCost
@@ -43,7 +48,7 @@ abstract contract MarketOrders is MarketAdmin {
         aggregateActiveEscrow += totalCost;
         lifetimeEscrowDeposited += totalCost;
 
-        emit OrderPlaced(orderId, msg.sender, _maxSize, _periods, _replicas);
+        emit OrderPlaced(orderId, msg.sender, _numChunks, _periods, _replicas);
 
         // Queue excess payment as pull-refund
         if (msg.value > totalCost) {
@@ -61,8 +66,7 @@ abstract contract MarketOrders is MarketAdmin {
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order expired");
         require(order.filled < order.replicas, "order already filled");
-        uint64 maxSize = order.maxSize;
-        require(nodeStaking.hasCapacity(msg.sender, maxSize), "insufficient capacity");
+        require(nodeStaking.hasCapacity(msg.sender, order.numChunks), "insufficient capacity");
 
         // Check if node is already assigned to this order
         address[] storage assignedNodes = orderToNodes[_orderId];
@@ -88,7 +92,7 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Update node's used capacity
         (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
-        nodeStaking.updateNodeUsed(msg.sender, used + maxSize);
+        nodeStaking.updateNodeUsed(msg.sender, used + order.numChunks);
 
         emit OrderFulfilled(_orderId, msg.sender);
 
@@ -310,7 +314,7 @@ abstract contract MarketOrders is MarketAdmin {
         // Calculate slash amount (up to QUIT_SLASH_PERIODS periods of storage cost, capped at remaining)
         uint256 remainingPeriods = (order.startPeriod + order.periods) - currentPeriod();
         uint256 slashPeriods = QUIT_SLASH_PERIODS < remainingPeriods ? QUIT_SLASH_PERIODS : remainingPeriods;
-        uint256 slashAmount = uint256(order.maxSize) * order.price * slashPeriods;
+        uint256 slashAmount = uint256(order.numChunks) * order.price * slashPeriods;
 
         // Cap to available stake to prevent revert.
         // Then enforce that the slash still leaves enough collateral to keep
@@ -319,10 +323,10 @@ abstract contract MarketOrders is MarketAdmin {
         if (slashAmount > nodeStake) {
             slashAmount = nodeStake;
         }
-        require(usedBeforeQuit >= order.maxSize, "invalid node usage");
+        require(usedBeforeQuit >= order.numChunks, "invalid node usage");
 
-        uint64 usedAfterQuit = usedBeforeQuit - order.maxSize;
-        uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * STAKE_PER_BYTE;
+        uint64 usedAfterQuit = usedBeforeQuit - order.numChunks;
+        uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * STAKE_PER_CHUNK;
         uint256 maxSafeSlash = nodeStake > requiredStakeAfterQuit ? nodeStake - requiredStakeAfterQuit : 0;
         require(slashAmount <= maxSafeSlash, "insufficient collateral for quit slash");
 
@@ -345,7 +349,7 @@ abstract contract MarketOrders is MarketAdmin {
         require(!_isUnresolvedProver(msg.sender), "active prover cannot rotate key");
 
         (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
-        uint256 fee = uint256(used) * STAKE_PER_BYTE * KEY_ROTATION_FEE_BPS / 10000;
+        uint256 fee = uint256(used) * STAKE_PER_CHUNK * KEY_ROTATION_FEE_BPS / 10000;
         require(msg.value >= fee, "insufficient rotation fee");
 
         keyCompromised[msg.sender] = false;
@@ -481,7 +485,7 @@ abstract contract MarketOrders is MarketAdmin {
                     emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
                 }
 
-                return order.maxSize;
+                return order.numChunks;
             }
         }
 
@@ -493,7 +497,6 @@ abstract contract MarketOrders is MarketAdmin {
         FileOrder storage order = orders[_orderId];
         address[] storage assignedNodes = orderToNodes[_orderId];
         uint256 settlePeriod = currentPeriod();
-        uint64 orderMaxSize = order.maxSize;
 
         uint256 settledReward = _settleOrderReward(_node, _orderId, settlePeriod);
         if (settledReward > 0) {
@@ -520,7 +523,7 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Free up node capacity
         (,, uint64 used,) = nodeStaking.getNodeInfo(_node);
-        nodeStaking.updateNodeUsed(_node, used - orderMaxSize);
+        nodeStaking.updateNodeUsed(_node, used - order.numChunks);
 
         // Remove order from node's order list
         _removeOrderFromNode(_node, _orderId);
@@ -558,7 +561,7 @@ abstract contract MarketOrders is MarketAdmin {
 
             (, uint64 capacity, uint64 used,) = nodeStaking.getNodeInfo(node);
             if (capacity > 0) {
-                nodeStaking.updateNodeUsed(node, used - order.maxSize);
+                nodeStaking.updateNodeUsed(node, used - order.numChunks);
             }
 
             assignedNodes.pop();
@@ -645,7 +648,7 @@ abstract contract MarketOrders is MarketAdmin {
         if (storageEndPeriod <= nodeStartPeriod) return 0;
 
         uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
-        uint256 totalEarnable = uint256(order.maxSize) * order.price * storagePeriods;
+        uint256 totalEarnable = uint256(order.numChunks) * order.price * storagePeriods;
         uint256 alreadyEarned = nodeOrderEarnings[_orderId][_node];
         if (totalEarnable <= alreadyEarned) return 0;
 

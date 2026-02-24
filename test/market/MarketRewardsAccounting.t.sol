@@ -54,7 +54,8 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         uint256 totalCost = uint256(512) * 2 * 1e12;
 
         vm.prank(user1);
-        market.placeOrder{value: totalCost + 1 ether}(_fileMeta(), 512, 2, 1, 1e12);
+        uint256[8] memory fspProof;
+        market.placeOrder{value: totalCost + 1 ether}(_fileMeta(), 512, 2, 1, 1e12, fspProof);
 
         assertEq(market.pendingRefunds(user1), 1 ether);
 

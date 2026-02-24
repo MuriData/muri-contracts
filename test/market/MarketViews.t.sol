@@ -39,7 +39,7 @@ contract MarketViewsTest is MarketTestBase {
         (
             uint256[] memory ids,
             address[] memory owners,
-            uint64[] memory sizes,
+            uint32[] memory sizes,
             uint16[] memory periods,
             uint8[] memory replicas,
             uint8[] memory filled,
@@ -81,7 +81,7 @@ contract MarketViewsTest is MarketTestBase {
             address owner_,
             string memory uri_,
             uint256 root_,
-            uint64 size_,
+            uint32 size_,
             uint16 periods_,
             uint8 replicas_,
             uint8 filled_

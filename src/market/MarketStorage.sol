@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
+import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
 import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 import {NodeStaking} from "../NodeStaking.sol";
 
@@ -30,10 +31,10 @@ abstract contract MarketStorage {
     struct FileOrder {
         address owner;
         FileMeta file;
-        uint64 maxSize; // bytes the client is willing to pay for
+        uint32 numChunks; // ZK-verified chunk count
         uint16 periods; // billing periods to store
         uint8 replicas; // desired redundancy
-        uint256 price; // wei / byte / period (quoting module can update global price curves)
+        uint256 price; // wei / chunk / period (quoting module can update global price curves)
         uint8 filled; // replica slots already taken
         uint64 startPeriod; // when storage begins
         uint256 escrow; // prepaid funds held in contract
@@ -52,6 +53,9 @@ abstract contract MarketStorage {
 
     // Proof of Integrity verifier contract
     Verifier public immutable poiVerifier;
+
+    // File Size Proof verifier contract
+    FspVerifier public immutable fspVerifier;
 
     // Key leak PLONK verifier contract
     KeyLeakVerifier public immutable keyleakVerifier;
@@ -108,11 +112,11 @@ abstract contract MarketStorage {
     // For larger files or slower hardware, consider increasing this value.
     // GPU-accelerated proving (icicle-gnark) reduces proving to ~1-2s.
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
-    uint256 public constant MIN_PROOF_FAILURE_SLASH = 500 * STAKE_PER_BYTE; // 0.05 ETH floor for proof-failure slash
+    uint256 public constant MIN_PROOF_FAILURE_SLASH = 500 * STAKE_PER_CHUNK; // floor for proof-failure slash
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
-    uint256 internal constant STAKE_PER_BYTE = 10 ** 14; // mirrors NodeStaking.STAKE_PER_BYTE
+    uint256 internal constant STAKE_PER_CHUNK = 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
     uint256 internal constant KEY_ROTATION_FEE_BPS = 3000; // 30% of used collateral
 
     ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
@@ -141,7 +145,7 @@ abstract contract MarketStorage {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
 
-    event OrderPlaced(uint256 indexed orderId, address indexed owner, uint64 maxSize, uint16 periods, uint8 replicas);
+    event OrderPlaced(uint256 indexed orderId, address indexed owner, uint32 numChunks, uint16 periods, uint8 replicas);
     event OrderFulfilled(uint256 indexed orderId, address indexed node);
     event OrderCompleted(uint256 indexed orderId);
     event OrderCancelled(uint256 indexed orderId, uint256 refundAmount);
@@ -177,6 +181,7 @@ abstract contract MarketStorage {
         owner = msg.sender;
         nodeStaking = new NodeStaking(address(this));
         poiVerifier = new Verifier();
+        fspVerifier = new FspVerifier();
         keyleakVerifier = new KeyLeakVerifier();
     }
 

@@ -22,8 +22,8 @@ contract NodeStaking {
 
     struct NodeInfo {
         uint256 stake; // locked native token (utility token on subnet)
-        uint64 capacity; // bytes committed (≤ stake / stakePerByte)
-        uint64 used; // active bytes
+        uint64 capacity; // chunks committed (≤ stake / STAKE_PER_CHUNK)
+        uint64 used; // active chunks
         uint256 publicKey; // hash-based public key H(secretKey) for proof verification
     }
 
@@ -31,7 +31,7 @@ contract NodeStaking {
     address[] public nodeList; // List of all registered node addresses
     mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
     mapping(uint256 => address) public publicKeyOwner; // enforces unique ZK identity keys
-    uint256 public constant STAKE_PER_BYTE = 10 ** 14; // configurable
+    uint256 public constant STAKE_PER_CHUNK = 10 ** 14; // configurable
 
     /// @dev BN254 scalar field order (Fr). Public key must be a valid field element.
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
@@ -39,8 +39,8 @@ contract NodeStaking {
     // ------------------------------------------------------------------
     // Incremental network aggregates (O(1) stats)
     // ------------------------------------------------------------------
-    uint256 public globalTotalCapacity; // sum of all node capacities (bytes)
-    uint256 public globalTotalUsed; // sum of all node used (bytes)
+    uint256 public globalTotalCapacity; // sum of all node capacities (chunks)
+    uint256 public globalTotalUsed; // sum of all node used (chunks)
 
     // ------------------------------------------------------------------
     // Reentrancy guard
@@ -70,7 +70,7 @@ contract NodeStaking {
     event KeyRotated(address indexed node, uint256 oldPublicKey, uint256 newPublicKey);
 
     /// @notice Register a new storage node by locking native tokens proportional to the desired capacity.
-    /// @param _capacity The number of bytes the node commits to serve. Must be > 0.
+    /// @param _capacity The number of chunks the node commits to serve. Must be > 0.
     /// @param _publicKey Hash-based public key H(secretKey) for proof verification
     function stakeNode(uint64 _capacity, uint256 _publicKey) external payable nonReentrant {
         require(_capacity >= MIN_CAPACITY, "capacity too low");
@@ -80,7 +80,7 @@ contract NodeStaking {
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity == 0, "already staked");
 
-        uint256 requiredStake = uint256(_capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(_capacity) * STAKE_PER_CHUNK;
         require(msg.value == requiredStake, "incorrect stake amount");
 
         info.stake = requiredStake;
@@ -99,13 +99,13 @@ contract NodeStaking {
     }
 
     /// @notice Increase node capacity by staking additional native tokens.
-    /// @param _additionalCapacity Additional bytes to add to the node's commitment.
+    /// @param _additionalCapacity Additional chunks to add to the node's commitment.
     function increaseCapacity(uint64 _additionalCapacity) external payable nonReentrant {
         require(_additionalCapacity > 0, "invalid capacity");
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity > 0, "not a node");
 
-        uint256 additionalStake = uint256(_additionalCapacity) * STAKE_PER_BYTE;
+        uint256 additionalStake = uint256(_additionalCapacity) * STAKE_PER_CHUNK;
         require(msg.value == additionalStake, "incorrect stake amount");
 
         info.capacity += _additionalCapacity;
@@ -117,15 +117,15 @@ contract NodeStaking {
     }
 
     /// @notice Decrease node capacity and unlock a proportion of the stake.
-    /// @dev Node can only decrease capacity down to at least `used` bytes.
-    /// @param _reduceCapacity Bytes to reduce from the current capacity.
+    /// @dev Node can only decrease capacity down to at least `used` chunks.
+    /// @param _reduceCapacity Chunks to reduce from the current capacity.
     function decreaseCapacity(uint64 _reduceCapacity) external nonReentrant {
         require(!IMarketProverCheck(market).hasUnresolvedProofObligation(msg.sender), "unresolved proof obligation");
         NodeInfo storage info = nodes[msg.sender];
         require(info.capacity > 0, "not a node");
         require(_reduceCapacity > 0 && _reduceCapacity <= info.capacity - info.used, "cannot reduce below used");
 
-        uint256 stakeToRelease = uint256(_reduceCapacity) * STAKE_PER_BYTE;
+        uint256 stakeToRelease = uint256(_reduceCapacity) * STAKE_PER_CHUNK;
         info.capacity -= _reduceCapacity;
         info.stake -= stakeToRelease;
 
@@ -197,8 +197,8 @@ contract NodeStaking {
     /// @notice Get node information for external contracts
     /// @param node The address of the node
     /// @return stake The amount of stake locked
-    /// @return capacity The total capacity in bytes
-    /// @return used The currently used capacity in bytes
+    /// @return capacity The total capacity in chunks
+    /// @return used The currently used capacity in chunks
     /// @return publicKey The node's hash-based public key
     function getNodeInfo(address node)
         external
@@ -222,11 +222,11 @@ contract NodeStaking {
 
     /// @notice Check if a node has sufficient available capacity
     /// @param node The address of the node
-    /// @param requiredBytes The bytes needed
+    /// @param requiredChunks The chunks needed
     /// @return true if the node has sufficient capacity
-    function hasCapacity(address node, uint64 requiredBytes) external view returns (bool) {
+    function hasCapacity(address node, uint32 requiredChunks) external view returns (bool) {
         NodeInfo storage info = nodes[node];
-        return (info.capacity - info.used) >= requiredBytes;
+        return (info.capacity - info.used) >= requiredChunks;
     }
 
     /// @notice Returns whether a node is currently valid (has available capacity).
@@ -277,7 +277,7 @@ contract NodeStaking {
         info.stake -= slashAmount;
 
         // Calculate new capacity based on reduced stake
-        uint64 newCapacity = uint64(info.stake / STAKE_PER_BYTE);
+        uint64 newCapacity = uint64(info.stake / STAKE_PER_CHUNK);
 
         // Check if capacity reduction forces order exits
         forcedOrderExit = newCapacity < info.used;
@@ -294,7 +294,7 @@ contract NodeStaking {
 
             if (additionalSlash > 0) {
                 info.stake -= additionalSlash;
-                newCapacity = uint64(info.stake / STAKE_PER_BYTE);
+                newCapacity = uint64(info.stake / STAKE_PER_CHUNK);
             }
 
             // Set used capacity to new capacity (will be updated by market when orders are quit)
@@ -360,7 +360,7 @@ contract NodeStaking {
         if (info.capacity == 0) return 0;
 
         // Ensure node retains enough stake for currently used capacity
-        uint256 requiredStakeForUsed = uint256(info.used) * STAKE_PER_BYTE;
+        uint256 requiredStakeForUsed = uint256(info.used) * STAKE_PER_CHUNK;
         if (info.stake <= requiredStakeForUsed) return 0;
 
         return info.stake - requiredStakeForUsed;
@@ -380,7 +380,7 @@ contract NodeStaking {
         if (info.capacity == 0 || slashAmount > info.stake) return (0, false);
 
         uint256 remainingStake = info.stake - slashAmount;
-        newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
+        newCapacity = uint64(remainingStake / STAKE_PER_CHUNK);
         willForceExit = newCapacity < info.used;
 
         if (willForceExit) {
@@ -390,7 +390,7 @@ contract NodeStaking {
                 additionalSlash = remainingStake;
             }
             remainingStake -= additionalSlash;
-            newCapacity = uint64(remainingStake / STAKE_PER_BYTE);
+            newCapacity = uint64(remainingStake / STAKE_PER_CHUNK);
         }
     }
 

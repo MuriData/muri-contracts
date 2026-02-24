@@ -15,7 +15,7 @@ contract MarketCoreTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
 
         (uint256 stake, uint64 capacity, uint64 used, uint256 pubKey) = nodeStaking.getNodeInfo(node1);
-        assertEq(stake, uint256(TEST_CAPACITY) * STAKE_PER_BYTE);
+        assertEq(stake, uint256(TEST_CAPACITY) * STAKE_PER_CHUNK);
         assertEq(capacity, TEST_CAPACITY);
         assertEq(used, 0);
         assertEq(pubKey, 0x1234);
@@ -151,7 +151,7 @@ contract MarketCoreTest is MarketTestBase {
         market.setSlashAuthority(user2, true);
 
         vm.prank(user2);
-        market.slashNode(node1, nodeStaking.STAKE_PER_BYTE(), "challenge failure");
+        market.slashNode(node1, nodeStaking.STAKE_PER_CHUNK(), "challenge failure");
 
         address[] memory orderNodes = market.getOrderNodes(orderId);
         assertEq(orderNodes.length, 0);

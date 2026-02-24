@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {FileMarket} from "../../src/Market.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {MarketStorage} from "../../src/market/MarketStorage.sol";
+import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
 
 abstract contract MarketTestBase is Test {
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
@@ -19,7 +20,7 @@ abstract contract MarketTestBase is Test {
     address internal node3 = address(0x5555);
 
     uint64 internal constant TEST_CAPACITY = 1024;
-    uint256 internal constant STAKE_PER_BYTE = 10 ** 14;
+    uint256 internal constant STAKE_PER_CHUNK = 10 ** 14;
     uint256 internal constant PERIOD = 7 days;
     uint256 internal constant CHALLENGE_WINDOW_BLOCKS = 50;
 
@@ -29,6 +30,13 @@ abstract contract MarketTestBase is Test {
     function setUp() public virtual {
         market = new FileMarket();
         nodeStaking = market.nodeStaking();
+
+        // Mock FSP verifier to always succeed so existing tests don't need valid proofs
+        vm.mockCall(
+            address(market.fspVerifier()),
+            abi.encodeWithSelector(FspVerifier.verifyProof.selector),
+            abi.encode()
+        );
 
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
@@ -42,7 +50,7 @@ abstract contract MarketTestBase is Test {
     }
 
     function _stakeNode(address node, uint64 capacity, uint256 key) internal {
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.deal(node, node.balance + stake);
         vm.prank(node);
         nodeStaking.stakeNode{value: stake}(capacity, key);
@@ -52,13 +60,17 @@ abstract contract MarketTestBase is Test {
         _stakeNode(node, TEST_CAPACITY, key);
     }
 
-    function _placeOrder(address owner_, uint64 maxSize, uint16 periods, uint8 replicas, uint256 price)
+    function _emptyFspProof() internal pure returns (uint256[8] memory proof) {
+        // Returns zeroed proof array — works with mocked FSP verifier
+    }
+
+    function _placeOrder(address owner_, uint32 numChunks, uint16 periods, uint8 replicas, uint256 price)
         internal
         returns (uint256 orderId, uint256 totalCost)
     {
-        totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
+        totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         vm.prank(owner_);
-        orderId = market.placeOrder{value: totalCost}(_fileMeta(), maxSize, periods, replicas, price);
+        orderId = market.placeOrder{value: totalCost}(_fileMeta(), numChunks, periods, replicas, price, _emptyFspProof());
     }
 
     function _placeDefaultOrder(address owner_, uint8 replicas) internal returns (uint256 orderId, uint256 totalCost) {
@@ -90,12 +102,13 @@ contract BaseRevertingReceiver {
         market = _market;
     }
 
-    function placeOrderWithOverpayment(uint64 maxSize, uint16 periods, uint8 replicas, uint256 price, uint256 overpay)
+    function placeOrderWithOverpayment(uint32 numChunks, uint16 periods, uint8 replicas, uint256 price, uint256 overpay)
         external
     {
-        uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
+        uint256 totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: 0x123, uri: "test"});
-        market.placeOrder{value: totalCost + overpay}(meta, maxSize, periods, replicas, price);
+        uint256[8] memory fspProof;
+        market.placeOrder{value: totalCost + overpay}(meta, numChunks, periods, replicas, price, fspProof);
     }
 
     receive() external payable {

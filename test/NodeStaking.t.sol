@@ -11,7 +11,7 @@ contract NodeStakingTest is Test {
     address public node2 = address(0x2);
     address public node3 = address(0x3);
 
-    uint256 public constant STAKE_PER_BYTE = 10 ** 14;
+    uint256 public constant STAKE_PER_CHUNK = 10 ** 14;
     uint64 public constant MIN_CAPACITY = 1;
 
     event NodeStaked(address indexed node, uint256 stake, uint64 capacity);
@@ -39,7 +39,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_Success() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.expectEmit(true, false, false, true);
         emit NodeStaked(node1, requiredStake, capacity);
@@ -55,7 +55,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertInsufficientStake() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         vm.expectRevert("incorrect stake amount");
@@ -64,7 +64,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertExcessiveStake() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         vm.expectRevert("incorrect stake amount");
@@ -79,7 +79,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertAlreadyStaked() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -94,14 +94,14 @@ contract NodeStakingTest is Test {
     function test_IncreaseCapacity_Success() public {
         // First stake a node
         uint64 initialCapacity = 1000;
-        uint256 initialStake = uint256(initialCapacity) * STAKE_PER_BYTE;
+        uint256 initialStake = uint256(initialCapacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: initialStake}(initialCapacity, 0x1234);
 
         // Then increase capacity
         uint64 additionalCapacity = 500;
-        uint256 additionalStake = uint256(additionalCapacity) * STAKE_PER_BYTE;
+        uint256 additionalStake = uint256(additionalCapacity) * STAKE_PER_CHUNK;
 
         vm.expectEmit(true, false, false, true);
         emit NodeCapacityIncreased(node1, additionalStake, initialCapacity + additionalCapacity);
@@ -123,7 +123,7 @@ contract NodeStakingTest is Test {
 
     function test_IncreaseCapacity_RevertInvalidCapacity() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -137,13 +137,13 @@ contract NodeStakingTest is Test {
 
     function test_DecreaseCapacity_Success() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
 
         uint64 reduceCapacity = 300;
-        uint256 stakeToRelease = uint256(reduceCapacity) * STAKE_PER_BYTE;
+        uint256 stakeToRelease = uint256(reduceCapacity) * STAKE_PER_CHUNK;
         uint256 initialBalance = node1.balance;
 
         vm.expectEmit(true, false, false, true);
@@ -161,7 +161,7 @@ contract NodeStakingTest is Test {
 
     function test_DecreaseCapacity_RevertCannotReduceBelowUsed() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -178,7 +178,7 @@ contract NodeStakingTest is Test {
 
     function test_UnstakeNode_Success() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -200,7 +200,7 @@ contract NodeStakingTest is Test {
 
     function test_UnstakeNode_RevertWhileStoringData() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -217,7 +217,7 @@ contract NodeStakingTest is Test {
 
     function test_HasCapacity() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -234,7 +234,7 @@ contract NodeStakingTest is Test {
 
     function test_UpdateNodeUsed() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -247,7 +247,7 @@ contract NodeStakingTest is Test {
 
     function test_UpdateNodeUsed_RevertExceedsCapacity() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -262,7 +262,7 @@ contract NodeStakingTest is Test {
         vm.assume(capacity >= MIN_CAPACITY);
         vm.assume(capacity <= 1000000); // reasonable upper bound
 
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.assume(requiredStake <= 100 ether); // within our test balance
 
         vm.prank(node1);
@@ -279,8 +279,8 @@ contract NodeStakingTest is Test {
         vm.assume(increaseBy > 0 && increaseBy <= 5000);
         vm.assume(decreaseBy > 0 && decreaseBy <= initialCapacity);
 
-        uint256 initialStake = uint256(initialCapacity) * STAKE_PER_BYTE;
-        uint256 additionalStake = uint256(increaseBy) * STAKE_PER_BYTE;
+        uint256 initialStake = uint256(initialCapacity) * STAKE_PER_CHUNK;
+        uint256 additionalStake = uint256(increaseBy) * STAKE_PER_CHUNK;
 
         vm.assume(initialStake + additionalStake <= 50 ether);
 
@@ -299,7 +299,7 @@ contract NodeStakingTest is Test {
 
             (uint256 finalStake, uint64 finalCapacity,,) = nodeStaking.getNodeInfo(node1);
             assertEq(finalCapacity, initialCapacity + increaseBy - decreaseBy);
-            assertEq(finalStake, (initialStake + additionalStake) - (uint256(decreaseBy) * STAKE_PER_BYTE));
+            assertEq(finalStake, (initialStake + additionalStake) - (uint256(decreaseBy) * STAKE_PER_CHUNK));
         }
     }
 
@@ -307,12 +307,12 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_ReturnsTotalSlashed() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
 
-        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        uint256 slashAmount = 100 * STAKE_PER_CHUNK;
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
 
         assertFalse(forcedOrderExit);
@@ -321,7 +321,7 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_ReturnsTotalSlashed_WithAdditionalPenalty() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
@@ -329,7 +329,7 @@ contract NodeStakingTest is Test {
         // Use all capacity so any slash forces exit
         nodeStaking.updateNodeUsed(node1, capacity);
 
-        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        uint256 slashAmount = 100 * STAKE_PER_CHUNK;
         uint256 expectedAdditional = slashAmount / 2; // 50% additional penalty
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
 
@@ -339,12 +339,12 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_SendsFundsToMarket() public {
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: requiredStake}(capacity, 0x1234);
 
-        uint256 slashAmount = 100 * STAKE_PER_BYTE;
+        uint256 slashAmount = 100 * STAKE_PER_CHUNK;
         uint256 marketBalanceBefore = address(this).balance;
 
         nodeStaking.slashNode(node1, slashAmount);
@@ -364,7 +364,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertInvalidPublicKeyZero() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         vm.expectRevert("public key not in field");
         nodeStaking.stakeNode{value: stake}(capacity, 0);
@@ -372,7 +372,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertPublicKeyExceedsField() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         // BN254 scalar field order
         uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
         vm.prank(node1);
@@ -382,7 +382,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertPublicKeyMaxUint256() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         vm.expectRevert("public key not in field");
         nodeStaking.stakeNode{value: stake}(capacity, type(uint256).max);
@@ -390,7 +390,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_AcceptsMaxValidFieldElement() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         uint256 R = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, R - 1);
@@ -403,7 +403,7 @@ contract NodeStakingTest is Test {
 
     function test_StakeNode_RevertDuplicatePublicKey() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         uint256 sharedKey = 0x1234;
 
         vm.prank(node1);
@@ -416,7 +416,7 @@ contract NodeStakingTest is Test {
 
     function test_PublicKeyFreedAfterUnstake() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         uint256 key = 0x1234;
 
         vm.prank(node1);
@@ -433,7 +433,7 @@ contract NodeStakingTest is Test {
 
     function test_PublicKeyFreedAfterFullSlash() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         uint256 key = 0x1234;
 
         vm.prank(node1);
@@ -456,7 +456,7 @@ contract NodeStakingTest is Test {
 
     function test_DecreaseCapacity_RevertZeroReduce() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -469,7 +469,7 @@ contract NodeStakingTest is Test {
 
     function test_IncreaseCapacity_RevertIncorrectStakeAmount() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -487,7 +487,7 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_RevertZeroAmount() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -497,7 +497,7 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_RevertExceedsStake() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -507,7 +507,7 @@ contract NodeStakingTest is Test {
 
     function test_SlashNode_RevertNotMarket() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -520,13 +520,13 @@ contract NodeStakingTest is Test {
         // Node stakes small amount, uses all capacity
         // Slash nearly all → additionalSlash (50%) > remaining → capped
         uint64 capacity = 100;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, capacity);
 
         // Slash 90% of stake → remaining = 10%, additional = 45% but capped to 10%
-        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        uint256 slashAmount = 90 * STAKE_PER_CHUNK;
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
 
         assertTrue(forcedExit);
@@ -541,14 +541,14 @@ contract NodeStakingTest is Test {
     function test_SlashNode_ExactStakeSlash_NoForcedExit() public {
         // Slash exactly the amount that reduces capacity to used (no forced exit)
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, 500);
 
         // Slash enough to bring capacity down to exactly 500 (used)
         // new capacity = (stake - slashAmount) / SPB = 500 → slashAmount = 500 * SPB
-        uint256 slashAmount = 500 * STAKE_PER_BYTE;
+        uint256 slashAmount = 500 * STAKE_PER_CHUNK;
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(node1, slashAmount);
 
         assertFalse(forcedExit, "no forced exit when capacity == used");
@@ -563,7 +563,7 @@ contract NodeStakingTest is Test {
 
     function test_ForceReduceUsed_Success() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, 500);
@@ -575,7 +575,7 @@ contract NodeStakingTest is Test {
 
     function test_ForceReduceUsed_RevertNotMarket() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -591,7 +591,7 @@ contract NodeStakingTest is Test {
 
     function test_ForceReduceUsed_RevertExceedsCapacity() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -607,7 +607,7 @@ contract NodeStakingTest is Test {
 
     function test_GetMaxSlashable_StakeLessThanRequired() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, capacity); // fully used
@@ -617,12 +617,12 @@ contract NodeStakingTest is Test {
 
     function test_GetMaxSlashable_Normal() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, 300);
 
-        uint256 expected = (1000 - 300) * STAKE_PER_BYTE;
+        uint256 expected = (1000 - 300) * STAKE_PER_CHUNK;
         assertEq(nodeStaking.getMaxSlashable(node1), expected);
     }
 
@@ -636,7 +636,7 @@ contract NodeStakingTest is Test {
 
     function test_SimulateSlash_ExceedsStake() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
@@ -647,11 +647,11 @@ contract NodeStakingTest is Test {
 
     function test_SimulateSlash_NoForcedExit() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
-        uint256 slashAmount = 200 * STAKE_PER_BYTE;
+        uint256 slashAmount = 200 * STAKE_PER_CHUNK;
         (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
         assertEq(newCap, 800);
         assertFalse(willForce);
@@ -659,12 +659,12 @@ contract NodeStakingTest is Test {
 
     function test_SimulateSlash_ForcedExit() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, 900);
 
-        uint256 slashAmount = 200 * STAKE_PER_BYTE;
+        uint256 slashAmount = 200 * STAKE_PER_CHUNK;
         // remaining = 800*SPB, cap = 800, used = 900 → forced exit
         // additional = 100*SPB (50% of 200), remaining -= 100 → 700*SPB, cap = 700
         (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
@@ -674,12 +674,12 @@ contract NodeStakingTest is Test {
 
     function test_SimulateSlash_ForcedExit_AdditionalCapped() public {
         uint64 capacity = 100;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, capacity);
 
-        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        uint256 slashAmount = 90 * STAKE_PER_CHUNK;
         // remaining = 10*SPB, cap = 10, used = 100 → forced exit
         // additional = 45*SPB (capped to 10*SPB), remaining = 0, cap = 0
         (uint64 newCap, bool willForce) = nodeStaking.simulateSlash(node1, slashAmount);
@@ -691,12 +691,12 @@ contract NodeStakingTest is Test {
 
     function test_GetNetworkStats() public {
         uint64 cap1 = 1000;
-        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake1}(cap1, 0x1234);
 
         uint64 cap2 = 2000;
-        uint256 stake2 = uint256(cap2) * STAKE_PER_BYTE;
+        uint256 stake2 = uint256(cap2) * STAKE_PER_CHUNK;
         vm.prank(node2);
         nodeStaking.stakeNode{value: stake2}(cap2, 0xaaaa);
 
@@ -711,7 +711,7 @@ contract NodeStakingTest is Test {
 
     function test_GetNetworkStats_ExcludesUnstakedNode() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
         vm.prank(node2);
@@ -732,7 +732,7 @@ contract NodeStakingTest is Test {
 
     function test_UnstakeNode_RemovesFromNodeList() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
@@ -747,7 +747,7 @@ contract NodeStakingTest is Test {
 
     function test_UnstakeNode_SwapAndPop_MiddleNode() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
 
         // Stake 3 nodes
         vm.prank(node1);
@@ -773,7 +773,7 @@ contract NodeStakingTest is Test {
 
     function test_Restake_AfterUnstake() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
@@ -796,7 +796,7 @@ contract NodeStakingTest is Test {
 
     function test_UpdateNodeUsed_RevertNotMarket() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
 
@@ -818,7 +818,7 @@ contract NodeStakingTest is Test {
 
     function test_IsValidNode_ReturnsFalseAfterUnstake() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
         assertTrue(nodeStaking.isValidNode(node1));
@@ -832,7 +832,7 @@ contract NodeStakingTest is Test {
 
     function test_DecreaseCapacity_ToZero_RemovesFromNodeList() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
@@ -856,7 +856,7 @@ contract NodeStakingTest is Test {
 
     function test_DecreaseCapacity_ToZero_ThenRestake_NoDuplicate() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
@@ -880,18 +880,18 @@ contract NodeStakingTest is Test {
     function test_DecreaseCapacity_ToZero_RefundsDust() public {
         // Stake node with 1000 bytes
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
 
         // Slash an amount that leaves sub-byte dust.
-        // Slash 1.5 bytes worth → stake becomes 998.5 * STAKE_PER_BYTE
-        // capacity floors to 998, dust = 0.5 * STAKE_PER_BYTE
-        uint256 slashAmount = STAKE_PER_BYTE + STAKE_PER_BYTE / 2; // 1.5 * STAKE_PER_BYTE
+        // Slash 1.5 bytes worth → stake becomes 998.5 * STAKE_PER_CHUNK
+        // capacity floors to 998, dust = 0.5 * STAKE_PER_CHUNK
+        uint256 slashAmount = STAKE_PER_CHUNK + STAKE_PER_CHUNK / 2; // 1.5 * STAKE_PER_CHUNK
         nodeStaking.slashNode(node1, slashAmount);
 
         (uint256 stakeAfterSlash, uint64 capAfterSlash, uint64 usedAfterSlash,) = nodeStaking.getNodeInfo(node1);
-        uint256 expectedDust = stakeAfterSlash - uint256(capAfterSlash) * STAKE_PER_BYTE;
+        uint256 expectedDust = stakeAfterSlash - uint256(capAfterSlash) * STAKE_PER_CHUNK;
         assertTrue(expectedDust > 0, "precondition: dust must exist");
         assertEq(usedAfterSlash, 0);
 
@@ -900,9 +900,9 @@ contract NodeStakingTest is Test {
         vm.prank(node1);
         nodeStaking.decreaseCapacity(capAfterSlash);
 
-        // Node should receive capacity*STAKE_PER_BYTE + dust
+        // Node should receive capacity*STAKE_PER_CHUNK + dust
         uint256 node1BalAfter = node1.balance;
-        uint256 expectedRefund = uint256(capAfterSlash) * STAKE_PER_BYTE + expectedDust;
+        uint256 expectedRefund = uint256(capAfterSlash) * STAKE_PER_CHUNK + expectedDust;
         assertEq(node1BalAfter - node1BalBefore, expectedRefund, "node must receive full refund including dust");
 
         // Node state must be fully cleaned up
@@ -922,7 +922,7 @@ contract NodeStakingTest is Test {
         vm.deal(address(malicious), 10 ether);
 
         uint64 capacity = 1000;
-        uint256 requiredStake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 requiredStake = uint256(capacity) * STAKE_PER_CHUNK;
 
         // First, the malicious contract stakes normally
         malicious.stakeNormally{value: requiredStake}(capacity);
@@ -937,23 +937,23 @@ contract NodeStakingTest is Test {
     // ===== SLASH TO ZERO CAPACITY — RESIDUAL STAKE CLEANUP =====
 
     /// @notice When slashing leaves capacity == 0 but residual stake > 0 (due to
-    /// rounding in stake / STAKE_PER_BYTE), the residual must be burned and the
+    /// rounding in stake / STAKE_PER_CHUNK), the residual must be burned and the
     /// node cleaned up. Otherwise the node becomes invalid yet cannot unstake,
     /// permanently locking the residual funds.
     function test_SlashNode_ZeroCapacity_BurnsResidualAndCleansUp() public {
-        // Stake 2 bytes → stake = 2 * STAKE_PER_BYTE
+        // Stake 2 bytes → stake = 2 * STAKE_PER_CHUNK
         uint64 capacity = 2;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
         assertTrue(nodeStaking.isValidNode(node1), "node should be valid");
 
-        // Slash just over 1 byte's worth so remaining < STAKE_PER_BYTE → capacity = 0, residual > 0
-        uint256 slashAmount = STAKE_PER_BYTE + 1;
-        uint256 residual = stake - slashAmount; // STAKE_PER_BYTE - 1
+        // Slash just over 1 byte's worth so remaining < STAKE_PER_CHUNK → capacity = 0, residual > 0
+        uint256 slashAmount = STAKE_PER_CHUNK + 1;
+        uint256 residual = stake - slashAmount; // STAKE_PER_CHUNK - 1
         assertTrue(residual > 0, "should have residual");
-        assertTrue(residual < STAKE_PER_BYTE, "residual should not cover 1 byte");
+        assertTrue(residual < STAKE_PER_CHUNK, "residual should not cover 1 byte");
 
         uint256 burnBalanceBefore = address(0).balance;
         nodeStaking.slashNode(node1, slashAmount);
@@ -977,13 +977,13 @@ contract NodeStakingTest is Test {
     /// still cleaned up and removed from nodeList.
     function test_SlashNode_ZeroCapacity_NoResidual_CleansUp() public {
         uint64 capacity = 100;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
         nodeStaking.updateNodeUsed(node1, capacity);
 
         // Slash 90% → forced exit → additional 50% capped to remaining → full drain
-        uint256 slashAmount = 90 * STAKE_PER_BYTE;
+        uint256 slashAmount = 90 * STAKE_PER_CHUNK;
         nodeStaking.slashNode(node1, slashAmount);
 
         // Node should be fully cleaned up
@@ -1003,12 +1003,12 @@ contract NodeStakingTest is Test {
     /// by "already staked" since the node entry was deleted.
     function test_SlashNode_ZeroCapacity_CanRestake() public {
         uint64 capacity = 2;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0x1234);
 
         // Slash to zero capacity with residual
-        uint256 slashAmount = STAKE_PER_BYTE + 1;
+        uint256 slashAmount = STAKE_PER_CHUNK + 1;
         nodeStaking.slashNode(node1, slashAmount);
 
         // Re-stake should succeed (not blocked by "already staked")
@@ -1022,7 +1022,7 @@ contract NodeStakingTest is Test {
     /// @notice decreaseCapacity reverts when the market reports an unresolved proof obligation.
     function test_DecreaseCapacity_RevertWhenProverObligated() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA);
@@ -1046,7 +1046,7 @@ contract NodeStakingTest is Test {
     /// @notice unstakeNode reverts when the market reports an unresolved proof obligation.
     function test_UnstakeNode_RevertWhenProverObligated() public {
         uint64 capacity = 1000;
-        uint256 stake = uint256(capacity) * STAKE_PER_BYTE;
+        uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
 
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(capacity, 0xAAAA);
@@ -1071,7 +1071,7 @@ contract NodeStakingTest is Test {
 
     function test_GlobalAggregates_StakeIncreaseDecrease() public {
         uint64 cap1 = 1000;
-        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake1}(cap1, 0x1234);
 
@@ -1080,7 +1080,7 @@ contract NodeStakingTest is Test {
 
         // Increase capacity
         uint64 addCap = 500;
-        uint256 addStake = uint256(addCap) * STAKE_PER_BYTE;
+        uint256 addStake = uint256(addCap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.increaseCapacity{value: addStake}(addCap);
 
@@ -1095,7 +1095,7 @@ contract NodeStakingTest is Test {
 
     function test_GlobalAggregates_UsedTracking() public {
         uint64 cap = 1000;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
 
@@ -1114,14 +1114,14 @@ contract NodeStakingTest is Test {
 
     function test_GlobalAggregates_SlashReducesCapacity() public {
         uint64 cap = 10;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
 
         nodeStaking.updateNodeUsed(node1, 3);
 
         // Slash 2 bytes worth of stake (no forced exit since newCap=8 > used=3)
-        uint256 slashAmt = 2 * STAKE_PER_BYTE;
+        uint256 slashAmt = 2 * STAKE_PER_CHUNK;
         nodeStaking.slashNode(node1, slashAmt);
 
         assertEq(nodeStaking.globalTotalCapacity(), 8, "capacity after slash");
@@ -1130,12 +1130,12 @@ contract NodeStakingTest is Test {
 
     function test_GlobalAggregates_SlashToZeroRemovesAll() public {
         uint64 cap = 2;
-        uint256 stake = uint256(cap) * STAKE_PER_BYTE;
+        uint256 stake = uint256(cap) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake}(cap, 0x1234);
 
         // Slash enough to bring capacity to zero
-        uint256 slashAmt = STAKE_PER_BYTE + 1;
+        uint256 slashAmt = STAKE_PER_CHUNK + 1;
         nodeStaking.slashNode(node1, slashAmt);
 
         assertEq(nodeStaking.globalTotalCapacity(), 0, "capacity zero after full slash");
@@ -1144,12 +1144,12 @@ contract NodeStakingTest is Test {
 
     function test_GlobalAggregates_MultipleNodes() public {
         uint64 cap1 = 1000;
-        uint256 stake1 = uint256(cap1) * STAKE_PER_BYTE;
+        uint256 stake1 = uint256(cap1) * STAKE_PER_CHUNK;
         vm.prank(node1);
         nodeStaking.stakeNode{value: stake1}(cap1, 0x1111);
 
         uint64 cap2 = 2000;
-        uint256 stake2 = uint256(cap2) * STAKE_PER_BYTE;
+        uint256 stake2 = uint256(cap2) * STAKE_PER_CHUNK;
         vm.prank(node2);
         nodeStaking.stakeNode{value: stake2}(cap2, 0x3333);
 

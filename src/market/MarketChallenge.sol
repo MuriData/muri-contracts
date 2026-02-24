@@ -279,7 +279,7 @@ abstract contract MarketChallenge is MarketAccounting {
 
             // Slash the failed node — proportional to order value, floored at MIN_PROOF_FAILURE_SLASH
             FileOrder storage order = orders[slot.orderId];
-            uint256 orderPeriodCost = uint256(order.maxSize) * order.price;
+            uint256 orderPeriodCost = uint256(order.numChunks) * order.price;
             uint256 slashAmount = orderPeriodCost > MIN_PROOF_FAILURE_SLASH ? orderPeriodCost : MIN_PROOF_FAILURE_SLASH;
 
             if (nodeStaking.isValidNode(failedNode)) {
