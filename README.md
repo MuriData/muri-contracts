@@ -2,13 +2,13 @@
 
 MuriData is a prototype decentralized storage marketplace that pairs a payment/assignment layer (`FileMarket.sol`) with a collateralized staking layer (`NodeStaking.sol`). Clients prepay for storage, nodes stake collateral proportional to the capacity they promise, and a parallel challenge-slot system verifies storage integrity through Groth16 zk-proofs with on-chain slashing.
 
-The system is not production ready, but the current implementation demonstrates the full lifecycle of an order, including node participation, reward accrual, challenge-based proof verification, key rotation, and forced exits.
+The system is not production ready, but the current implementation demonstrates the full lifecycle of an order, including node participation, reward accrual, challenge-based proof verification, and forced exits.
 
 ---
 
 ## Key Contracts
 
-- **`FileMarket.sol`** (entrypoint via `Market.sol`) — manages orders, replica assignments, reward settlement, parallel challenge slots, key rotation, key leak reporting, and slashing orchestration. Built as a modular inheritance chain:
+- **`FileMarket.sol`** (entrypoint via `Market.sol`) — manages orders, replica assignments, reward settlement, parallel challenge slots, key leak reporting, and slashing orchestration. Built as a modular inheritance chain:
 
   ```
   Market.sol (entrypoint)
@@ -20,7 +20,7 @@ The system is not production ready, but the current implementation demonstrates 
                              └─ MarketStorage.sol (shared storage, constants, structs, events)
   ```
 
-- **`NodeStaking.sol`** — tracks node stake, capacity, usage, and ZK public keys; exposes slash, capacity adjustment, and key rotation hooks that only `FileMarket` can call.
+- **`NodeStaking.sol`** — tracks node stake, capacity, usage, and ZK public keys; exposes slash and capacity adjustment hooks that only `FileMarket` can call.
 - **`poi_verifier.sol`** (imported as `Verifier`) — Groth16 zk-proof verifier used during challenge rounds to validate multi-leaf Proof of Integrity (8 parallel Merkle openings per proof, 4 public inputs: commitment, randomness, publicKey, fileRootHash).
 - **`keyleak_verifier.sol`** (imported as `PlonkVerifier`) — PLONK verifier for key leak proofs, enabling full-stake slashing of nodes whose secret key is compromised.
 
@@ -33,8 +33,8 @@ Both `NodeStaking` and verifier contracts are deployed by `FileMarket`'s constru
 | Actor | Capabilities |
 |---|---|
 | **Clients** | Create and cancel storage orders, prepay escrow, receive pull-payment refunds when orders complete. |
-| **Storage nodes** | Stake collateral, accept replica assignments, submit zk-proofs for challenges, rotate keys, claim accrued rewards. |
-| **Reporters** | Call `processExpiredSlots` to slash lazy nodes and earn reporter rewards; call `reportKeyLeak` with a PLONK proof to slash compromised nodes. |
+| **Storage nodes** | Stake collateral, accept replica assignments, submit zk-proofs for challenges, claim accrued rewards. |
+| **Reporters** | Call `processExpiredSlots` to slash lazy nodes and earn reporter rewards; call `reportKeyLeak` with a PLONK proof to fully slash compromised nodes. |
 | **Slash authorities** | Addresses approved by `owner` that can trigger manual slashes (e.g. automated monitors). |
 | **Observers** | Anyone can call `activateSlots`, `processExpiredSlots`, or `completeExpiredOrder` to maintain system health. |
 
@@ -79,9 +79,9 @@ Designed for Avalanche C-Chain where blocks are produced on demand (~2s/block). 
 
 ## Key Management
 
-- **`rotateNodeKey(newPublicKey)`** — Rotate ZK public key without unstaking. Fee = 30% of used-capacity collateral, burned to `address(0)`. Free if no active orders. Blocked while under active challenge.
-- **`selfReportCompromised()`** — Node self-reports key compromise. Immediately blocks `submitProof` (active challenges will expire and slash). After `CHALLENGE_WINDOW_BLOCKS`, blocks `reportKeyLeak`. Node must call `rotateNodeKey` to clear and resume.
-- **`reportKeyLeak(proof)`** — Anyone holding the leaked secret key submits a PLONK proof for full-stake slash + reporter reward. Time-limited by `selfReportCompromised` window.
+A node's ZK public key is **permanent** once staked — no rotation is supported. MURI replicas bake the public key into every chunk via `r = H(publicKey, archiveRootHash)`, so rotation would invalidate all replicas.
+
+- **`reportKeyLeak(node, proof)`** — Anyone holding the leaked secret key submits a PLONK proof that `H(sk) == pk`, triggering full-stake slashing + reporter reward. After a full-stake slash the node is removed; there is no recovery path.
 
 ---
 
@@ -106,18 +106,18 @@ forge test -vvv          # verbose (used in CI)
 forge fmt --check        # check formatting
 ```
 
-**240 tests across 8 suites:**
+**232 tests across 8 suites:**
 
 | Suite | Tests | Coverage |
 |---|---|---|
 | `Market.t.sol` | 96 | Order lifecycle, rewards, cancellation, challenge slots, ZK proof integration |
 | `NodeStaking.t.sol` | 72 | Staking, capacity, unstaking, fuzz tests, reentrancy |
-| `MarketChallenge.t.sol` | 14 | Slot activation, proof submission, expiry, sweep, value-proportional slashing |
-| `MarketKeyRotation.t.sol` | 14 | Fee pricing, active/idle rotation, compromised flag, self-report |
+| `MarketChallenge.t.sol` | 17 | Slot activation, proof submission, expiry, sweep, value-proportional slashing |
 | `MarketCore.t.sol` | 11 | Core market functionality |
 | `MarketRewardsAccounting.t.sol` | 11 | Rewards tracking and accounting |
 | `MarketViews.t.sol` | 11 | View function correctness (slot info, global stats) |
 | `MarketKeyLeak.t.sol` | 8 | PLONK proof key leak reporting, full-stake slashing, reporter rewards |
+| `MarketFSP.t.sol` | 6 | File size proof verification, order lifecycle with FSP |
 
 ---
 
@@ -133,7 +133,6 @@ forge fmt --check        # check formatting
 | `NUM_CHALLENGE_SLOTS` | 5 | Parallel challenge slots |
 | `CHALLENGE_WINDOW_BLOCKS` | 50 | ~100s proof deadline |
 | `MIN_PROOF_FAILURE_SLASH` | 0.05 ETH | Floor for proof-failure slash |
-| `KEY_ROTATION_FEE_BPS` | 3000 | 30% of used collateral |
 | `QUIT_SLASH_PERIODS` | 3 | Periods charged on voluntary quit |
 
 ---
@@ -175,8 +174,8 @@ flowchart LR
     end
 
     Client -->|placeOrder / cancel / complete| FM
-    NodeA -->|stake / rotateKey| NS
-    NodeB -->|stake / rotateKey| NS
+    NodeA -->|stake| NS
+    NodeB -->|stake| NS
     FM -->|update usage / slash| NS
     FM -->|assign replicas / settle| NodeA
     FM -->|assign replicas / settle| NodeB

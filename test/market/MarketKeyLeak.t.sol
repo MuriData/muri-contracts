@@ -22,7 +22,8 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.prank(KL_REPORTER);
         market.reportKeyLeak(node1, KL_PROOF);
 
-        assertTrue(market.keyCompromised(node1));
+        // Node should be removed (full-stake slash)
+        assertFalse(nodeStaking.isValidNode(node1));
     }
 
     function test_ReportKeyLeak_SlashesFullStake() public {
@@ -63,7 +64,6 @@ contract MarketKeyLeakTest is MarketTestBase {
         market.reportKeyLeak(node1, KL_PROOF);
 
         // Node should be fully removed — no active orders
-        assertTrue(market.keyCompromised(node1));
         assertFalse(nodeStaking.isValidNode(node1));
     }
 
@@ -74,7 +74,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.prank(KL_REPORTER);
         market.reportKeyLeak(node1, KL_PROOF);
 
-        vm.expectRevert("key already reported");
+        vm.expectRevert("not a valid node");
         vm.prank(KL_REPORTER);
         market.reportKeyLeak(node1, KL_PROOF);
     }

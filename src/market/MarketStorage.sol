@@ -94,10 +94,6 @@ abstract contract MarketStorage {
     uint256 public totalBurnedFromSlash;
     uint256 public totalReporterRewards;
 
-    // Key leak tracking
-    mapping(address => bool) public keyCompromised;
-    mapping(address => uint256) public compromiseReportedBlock; // block when node self-reported (0 = not reported)
-
     // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
     uint256 public constant NUM_CHALLENGE_SLOTS = 5;
     // Timing budget (Avalanche C-Chain, ~2s/block):
@@ -117,8 +113,6 @@ abstract contract MarketStorage {
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
     uint256 internal constant STAKE_PER_CHUNK = 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
-    uint256 internal constant KEY_ROTATION_FEE_BPS = 3000; // 30% of used collateral
-
     ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
     bool public challengeSlotsInitialized;
     uint256 public globalSeedRandomness; // rolling seed for bootstrapping slot randomness
@@ -162,9 +156,6 @@ abstract contract MarketStorage {
     event RefundWithdrawn(address indexed recipient, uint256 amount);
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
     event KeyLeakReported(address indexed node, address indexed reporter, uint256 slashAmount);
-    event KeyRotationRequested(address indexed node, uint256 fee);
-    event CompromisedStatusCleared(address indexed node);
-    event KeyCompromiseSelfReported(address indexed node, uint256 lockBlock);
 
     // Challenge slot events
     event SlotChallengeIssued(

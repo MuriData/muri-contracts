@@ -343,49 +343,6 @@ abstract contract MarketOrders is MarketAdmin {
         emit NodeQuit(_orderId, msg.sender, slashAmount);
     }
 
-    /// @notice Rotate ZK public key. Fee = 30% of used collateral, burned.
-    function rotateNodeKey(uint256 _newPublicKey) external payable nonReentrant {
-        require(nodeStaking.isValidNode(msg.sender), "not a valid node");
-        require(!_isUnresolvedProver(msg.sender), "active prover cannot rotate key");
-
-        (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
-        uint256 fee = uint256(used) * STAKE_PER_CHUNK * KEY_ROTATION_FEE_BPS / 10000;
-        require(msg.value >= fee, "insufficient rotation fee");
-
-        keyCompromised[msg.sender] = false;
-        compromiseReportedBlock[msg.sender] = 0;
-        nodeStaking.rotateKey(msg.sender, _newPublicKey);
-
-        if (fee > 0) {
-            payable(address(0)).transfer(fee);
-        }
-        if (msg.value > fee) {
-            pendingRefunds[msg.sender] += msg.value - fee;
-            emit RefundQueued(msg.sender, msg.value - fee);
-        }
-
-        emit KeyRotationRequested(msg.sender, fee);
-    }
-
-    /// @notice Self-report key as compromised. Blocks proof submission immediately.
-    /// After CHALLENGE_WINDOW_BLOCKS, blocks reportKeyLeak (full-stake slash).
-    /// Node must rotateNodeKey to clear this state and resume proving.
-    function selfReportCompromised() external {
-        require(nodeStaking.isValidNode(msg.sender), "not a valid node");
-        require(compromiseReportedBlock[msg.sender] == 0, "already self-reported");
-        require(!keyCompromised[msg.sender], "key already compromised");
-        compromiseReportedBlock[msg.sender] = block.number;
-        emit KeyCompromiseSelfReported(msg.sender, block.number + CHALLENGE_WINDOW_BLOCKS);
-    }
-
-    /// @notice Clear keyCompromised for re-staked nodes. No fee.
-    function resetCompromisedStatus() external {
-        require(nodeStaking.isValidNode(msg.sender), "not a valid node");
-        require(keyCompromised[msg.sender], "not compromised");
-        keyCompromised[msg.sender] = false;
-        emit CompromisedStatusCleared(msg.sender);
-    }
-
     // External slashing function (for challenges/penalties)
     function slashNode(address _node, uint256 _slashAmount, string calldata _reason)
         external

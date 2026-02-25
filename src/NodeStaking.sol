@@ -67,7 +67,6 @@ contract NodeStaking {
     event NodeUnstaked(address indexed node, uint256 stakeReturned);
     event NodeSlashed(address indexed node, uint256 slashAmount, uint64 newCapacity, bool forcedOrderExit);
     event ForcedOrderExit(address indexed node, uint256[] orderIds, uint256 additionalSlash);
-    event KeyRotated(address indexed node, uint256 oldPublicKey, uint256 newPublicKey);
 
     /// @notice Register a new storage node by locking native tokens proportional to the desired capacity.
     /// @param _capacity The number of chunks the node commits to serve. Must be > 0.
@@ -233,24 +232,6 @@ contract NodeStaking {
     function isValidNode(address node) public view returns (bool) {
         NodeInfo storage info = nodes[node];
         return info.capacity > 0;
-    }
-
-    /// @notice Rotate a node's ZK public key (only callable by market contract)
-    /// @param _node The address of the node
-    /// @param _newPublicKey The new hash-based public key
-    function rotateKey(address _node, uint256 _newPublicKey) external onlyMarket {
-        NodeInfo storage info = nodes[_node];
-        require(info.capacity > 0, "not a node");
-        require(_newPublicKey != 0 && _newPublicKey < SNARK_SCALAR_FIELD, "public key not in field");
-        require(_newPublicKey != info.publicKey, "same key");
-        require(publicKeyOwner[_newPublicKey] == address(0), "public key already registered");
-
-        uint256 oldKey = info.publicKey;
-        delete publicKeyOwner[oldKey];
-        info.publicKey = _newPublicKey;
-        publicKeyOwner[_newPublicKey] = _node;
-
-        emit KeyRotated(_node, oldKey, _newPublicKey);
     }
 
     /// @notice Slash a node's stake and reduce capacity accordingly
