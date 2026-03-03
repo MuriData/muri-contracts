@@ -29,7 +29,7 @@ contract NodeStakingTest is Test {
         // Set the test contract as the authorized market so tests can call updateNodeUsed
         nodeStaking = new NodeStaking(address(this));
 
-        // Give test addresses some ETH
+        // Give test addresses some MURI
         vm.deal(node1, 100 ether);
         vm.deal(node2, 100 ether);
         vm.deal(node3, 100 ether);
@@ -911,7 +911,7 @@ contract NodeStakingTest is Test {
         assertEq(c, 0, "capacity cleared");
     }
 
-    // Allow test contract (acting as market) to receive ETH from slashNode
+    // Allow test contract (acting as market) to receive MURI from slashNode
     receive() external payable {}
 
     // ===== REENTRANCY TESTS =====
@@ -1187,7 +1187,7 @@ contract MaliciousReentrancy {
         nodeStaking.unstakeNode();
     }
 
-    // This will be called when we receive ETH from unstaking
+    // This will be called when we receive MURI from unstaking
     receive() external payable {
         if (!attacked) {
             attacked = true;

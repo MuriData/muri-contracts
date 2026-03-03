@@ -866,7 +866,7 @@ contract MarketTest is Test {
         vm.deal(user1, 1 ether);
         vm.prank(user1);
         (bool success,) = address(market).call{value: 0.1 ether}("");
-        assertTrue(success, "market can receive ETH");
+        assertTrue(success, "market can receive MURI");
     }
 
     function test_ClaimRewards_NonReentrant_WithContractReceiver() public {
@@ -2354,8 +2354,8 @@ contract RevertingReceiver {
         market.withdrawRefund();
     }
 
-    // Always revert when receiving ETH — simulates malicious/broken contract
+    // Always revert when receiving native token — simulates malicious/broken contract
     receive() external payable {
-        revert("I reject ETH");
+        revert("I reject MURI");
     }
 }

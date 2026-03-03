@@ -61,6 +61,6 @@ abstract contract MarketAccounting is MarketOrders {
         emit RefundWithdrawn(msg.sender, amount);
     }
 
-    /// @notice Allow contract to receive ETH from slashed nodes
+    /// @notice Allow contract to receive native token from slashed nodes
     receive() external payable {}
 }

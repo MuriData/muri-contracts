@@ -112,6 +112,6 @@ contract BaseRevertingReceiver {
     }
 
     receive() external payable {
-        revert("I reject ETH");
+        revert("I reject MURI");
     }
 }
