@@ -39,16 +39,41 @@ abstract contract MarketAccounting is MarketOrders {
         pending = reporterPendingRewards[_reporter];
     }
 
+    /// @notice Set the proof failure slash multiplier
+    /// @param _newMultiplier New multiplier (1 to MAX_PROOF_FAILURE_SLASH_MULTIPLIER)
+    function setProofFailureSlashMultiplier(uint256 _newMultiplier) external onlyOwner {
+        require(_newMultiplier >= 1 && _newMultiplier <= MAX_PROOF_FAILURE_SLASH_MULTIPLIER, "invalid multiplier");
+        uint256 oldMultiplier = proofFailureSlashMultiplier;
+        proofFailureSlashMultiplier = _newMultiplier;
+        emit ProofFailureSlashMultiplierUpdated(oldMultiplier, _newMultiplier);
+    }
+
+    /// @notice Set the client compensation percentage (in basis points)
+    /// @param _newBps New compensation percentage in basis points (max MAX_CLIENT_COMPENSATION_BPS)
+    function setClientCompensationBps(uint256 _newBps) external onlyOwner {
+        require(_newBps <= MAX_CLIENT_COMPENSATION_BPS, "exceeds max bps");
+        uint256 oldBps = clientCompensationBps;
+        clientCompensationBps = _newBps;
+        emit ClientCompensationBpsUpdated(oldBps, _newBps);
+    }
+
     /// @notice Get slash redistribution statistics
     function getSlashRedistributionStats()
         external
         view
-        returns (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards, uint256 currentBps)
+        returns (
+            uint256 totalReceived,
+            uint256 totalBurned,
+            uint256 totalRewards,
+            uint256 currentBps,
+            uint256 totalClientComp
+        )
     {
         totalReceived = totalSlashedReceived;
         totalBurned = totalBurnedFromSlash;
         totalRewards = totalReporterRewards;
         currentBps = reporterRewardBps;
+        totalClientComp = totalClientCompensation;
     }
 
     /// @notice Withdraw accumulated pull-payment refunds

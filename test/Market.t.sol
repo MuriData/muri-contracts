@@ -59,9 +59,7 @@ contract MarketTest is Test {
 
         // Mock FSP verifier to always succeed so tests don't need valid proofs
         vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyProof.selector),
-            abi.encode()
+            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
         );
 
         // Fund test accounts
@@ -99,7 +97,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         // First node executes
         vm.prank(node1);
@@ -139,7 +138,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         // Node executes order
         vm.prank(node1);
@@ -214,7 +214,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -226,7 +227,8 @@ contract MarketTest is Test {
 
         uint256 expectedReward = uint256(maxSize) * price; // 1 period of service
         uint256 expectedRemaining = totalCost - expectedReward;
-        uint256 expectedPenalty = expectedRemaining / 10;
+        // Scaled penalty: 2500 - (2000 * 1 / 4) = 2000 bps → 20%
+        uint256 expectedPenalty = expectedRemaining * 2000 / 10000;
         uint256 expectedRefund = expectedRemaining - expectedPenalty;
 
         // Node pending = settled reward + cancellation penalty
@@ -268,7 +270,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -285,7 +288,8 @@ contract MarketTest is Test {
         uint256 rewardPerNode = uint256(maxSize) * price * 1;
         uint256 totalReward = rewardPerNode * 2;
         uint256 remainingEscrow = totalCost - totalReward;
-        uint256 penalty = remainingEscrow / 10;
+        // Scaled penalty: 2500 - (2000 * 1 / 4) = 2000 bps → 20%
+        uint256 penalty = remainingEscrow * 2000 / 10000;
         uint256 expectedRefund = remainingEscrow - penalty;
         uint256 perNode = penalty / 2;
         // Last node gets remainder to avoid rounding dust
@@ -318,7 +322,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // Node front-runs cancel in same block
         vm.prank(node1);
@@ -345,7 +350,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -372,7 +378,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
 
         // node1 joins early
         vm.prank(node1);
@@ -392,7 +399,8 @@ contract MarketTest is Test {
         // Both nodes get 1-period rewards settled (node2 earns 0 via ceiling math)
         uint256 node1Reward = uint256(maxSize) * price * 1;
         uint256 remainingEscrow = totalCost - node1Reward; // node2 earned 0
-        uint256 penalty = remainingEscrow / 10;
+        // Scaled penalty: 2500 - (2000 * 1 / 4) = 2000 bps → 20%
+        uint256 penalty = remainingEscrow * 2000 / 10000;
         uint256 expectedRefund = remainingEscrow - penalty;
 
         // Only node1 gets the full penalty (sole eligible node)
@@ -435,7 +443,7 @@ contract MarketTest is Test {
         assertEq(market.reporterPendingRewards(user2), 0, "authority slash has no reporter reward");
 
         // All slash should be burned
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
         assertTrue(totalReceived > 0, "slashed funds received");
         assertEq(totalRewards, 0, "no reporter rewards for authority slash");
         assertEq(totalReceived, totalBurned, "all funds burned");
@@ -446,13 +454,14 @@ contract MarketTest is Test {
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
-        uint16 periods = 4; // use 4 periods so min(3, 4) = 3
+        uint16 periods = 4; // remaining=4 <= BASE(4) so slashPeriods = 4
         uint8 replicas = 1;
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -462,7 +471,7 @@ contract MarketTest is Test {
         // No reporter reward for voluntary quit
         assertEq(market.reporterPendingRewards(node1), 0, "no reporter reward for quit");
 
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
         assertTrue(totalReceived > 0, "slashed funds received");
         assertEq(totalRewards, 0, "no rewards for voluntary quit");
         assertEq(totalReceived, totalBurned, "all funds burned");
@@ -594,7 +603,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2; // 2 replicas
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -682,13 +692,15 @@ contract MarketTest is Test {
 
         vm.deal(user1, totalCost);
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         // Confirm the uncapped slash would exceed stake
-        uint256 rawSlash = uint256(maxSize) * price * 3; // QUIT_SLASH_PERIODS = 3
+        // New formula: remainingPeriods=4, <=BASE(4), so slashPeriods=4
+        uint256 rawSlash = uint256(maxSize) * price * 4;
         assertTrue(rawSlash > stakeBefore, "test setup: slash should exceed stake");
 
         // quitOrder must succeed (not revert) thanks to the cap
@@ -715,7 +727,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -748,14 +761,16 @@ contract MarketTest is Test {
         uint256 largePrice = 1e12;
         uint256 largeCost = uint256(largeSize) * uint256(periods) * largePrice;
         vm.prank(user1);
-        uint256 largeOrderId = market.placeOrder{value: largeCost}(fileMeta, uint32(largeSize), periods, 1, largePrice, _emptyFspProof());
+        uint256 largeOrderId =
+            market.placeOrder{value: largeCost}(fileMeta, uint32(largeSize), periods, 1, largePrice, _emptyFspProof());
 
         // Tiny cheap order used as the old forced-exit trigger.
         uint64 tinySize = 1;
         uint256 tinyPrice = 1;
         uint256 tinyCost = uint256(tinySize) * uint256(periods) * tinyPrice;
         vm.prank(user1);
-        uint256 tinyOrderId = market.placeOrder{value: tinyCost}(fileMeta, uint32(tinySize), periods, 1, tinyPrice, _emptyFspProof());
+        uint256 tinyOrderId =
+            market.placeOrder{value: tinyCost}(fileMeta, uint32(tinySize), periods, 1, tinyPrice, _emptyFspProof());
 
         vm.startPrank(node1);
         market.executeOrder(largeOrderId);
@@ -813,7 +828,7 @@ contract MarketTest is Test {
         vm.prank(user2);
         market.slashNode(node1, slashAmount, "test");
 
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
         assertEq(totalRewards, 0, "still no reward for authority slash even at 50%");
         assertEq(totalReceived, totalBurned);
     }
@@ -1064,7 +1079,9 @@ contract MarketTest is Test {
         uint256 excess = 1 ether;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(
+            fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof()
+        );
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -1078,7 +1095,8 @@ contract MarketTest is Test {
         // 1 period of rewards settled, then penalty on remaining
         uint256 reward = uint256(maxSize) * price * 1;
         uint256 remainingEscrow = totalCost - reward;
-        uint256 penalty = remainingEscrow / 10;
+        // Scaled penalty: 2500 - (2000 * 1 / 4) = 2000 bps → 20%
+        uint256 penalty = remainingEscrow * 2000 / 10000;
         uint256 cancelRefund = remainingEscrow - penalty;
         uint256 totalPending = excess + cancelRefund;
 
@@ -1100,7 +1118,9 @@ contract MarketTest is Test {
         uint256 excess = 3 ether;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(
+            fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof()
+        );
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -1139,7 +1159,8 @@ contract MarketTest is Test {
         uint256 totalCost1 = uint256(maxSize1) * 2 * price;
         uint256 excess1 = 0.5 ether;
         vm.prank(user1);
-        uint256 order1 = market.placeOrder{value: totalCost1 + excess1}(fileMeta, uint32(maxSize1), 2, 1, price, _emptyFspProof());
+        uint256 order1 =
+            market.placeOrder{value: totalCost1 + excess1}(fileMeta, uint32(maxSize1), 2, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(order1);
 
@@ -1148,7 +1169,8 @@ contract MarketTest is Test {
         uint256 totalCost2 = uint256(maxSize2) * 3 * price;
         uint256 excess2 = 1 ether;
         vm.prank(user2);
-        uint256 order2 = market.placeOrder{value: totalCost2 + excess2}(fileMeta, uint32(maxSize2), 3, 1, price, _emptyFspProof());
+        uint256 order2 =
+            market.placeOrder{value: totalCost2 + excess2}(fileMeta, uint32(maxSize2), 3, 1, price, _emptyFspProof());
         vm.prank(node2);
         market.executeOrder(order2);
 
@@ -1186,7 +1208,9 @@ contract MarketTest is Test {
         uint256 excess = 5 ether;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost + excess}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId = market.placeOrder{value: totalCost + excess}(
+            fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof()
+        );
 
         // Verify escrow stores totalCost, not msg.value
         (uint256 storedEscrow, uint256 paidToNodes, uint256 remaining) = market.getOrderEscrowInfo(orderId);
@@ -1219,7 +1243,7 @@ contract MarketTest is Test {
         assertEq(nodes.length, 0, "node removed after quit");
     }
 
-    function test_QuitSlash_ThreePeriodsDefault() public {
+    function test_QuitSlash_ScaledPenalty() public {
         // Node with large capacity so no forced exit
         uint64 largeCapacity = TEST_CAPACITY * 4;
         uint256 largeStake = uint256(largeCapacity) * STAKE_PER_CHUNK;
@@ -1229,12 +1253,13 @@ contract MarketTest is Test {
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
-        uint16 periods = 10; // many periods → min(3, 10) = 3
+        uint16 periods = 10; // remaining=10 → 4 + (10-4)/4 = 5 slashPeriods
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1245,13 +1270,10 @@ contract MarketTest is Test {
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
 
-        // Slash = maxSize * price * 3 = 256 * 1e12 * 3 = 768e12
-        uint256 expectedSlash = uint256(maxSize) * price * 3;
-        // Account for additional 50% penalty on forced exit slash
-        // But if no forced exit, the slash is just the base amount
-        // slashNode applies: actualSlash = min(slashAmount, stake), then 50% penalty if forced exit
-        // Since stake >> slash, actualSlash = expectedSlash, and may have additional penalty
-        assertTrue(stakeBefore - stakeAfter >= expectedSlash, "slash >= 3 periods of storage cost");
+        // Slash = maxSize * price * 5 = 256 * 1e12 * 5 = 1280e12
+        // (scaled: base=4 + (10-4)/4 = 5 periods)
+        uint256 expectedSlash = uint256(maxSize) * price * 5;
+        assertTrue(stakeBefore - stakeAfter >= expectedSlash, "slash >= scaled quit penalty");
     }
 
     function test_QuitSlash_CappedAtRemainingPeriods() public {
@@ -1264,12 +1286,13 @@ contract MarketTest is Test {
 
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint64 maxSize = 256;
-        uint16 periods = 2; // only 2 periods → min(3, 2) = 2
+        uint16 periods = 2; // only 2 periods → remaining <= BASE(4) so slashPeriods = 2
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1295,7 +1318,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * 2; // 2 replicas
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1332,7 +1356,8 @@ contract MarketTest is Test {
 
         // 51st order should revert
         vm.prank(user1);
-        uint256 orderId51 = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
+        uint256 orderId51 =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
         vm.prank(node1);
         vm.expectRevert("max orders per node reached");
         market.executeOrder(orderId51);
@@ -1347,7 +1372,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         assertEq(market.getActiveOrdersCount(), 1, "order should be in activeOrders");
         assertEq(market.getChallengeableOrdersCount(), 0, "order should NOT be in challengeableOrders");
@@ -1364,7 +1390,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         assertEq(market.getChallengeableOrdersCount(), 0, "not yet challengeable");
 
@@ -1394,7 +1421,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -1415,7 +1443,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1438,7 +1467,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1463,7 +1493,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -1498,7 +1529,8 @@ contract MarketTest is Test {
         uint256[] memory orderIds = new uint256[](3);
         for (uint256 i = 0; i < 3; i++) {
             vm.prank(user1);
-            orderIds[i] = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+            orderIds[i] =
+                market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
             vm.prank(node1);
             market.executeOrder(orderIds[i]);
         }
@@ -1525,7 +1557,8 @@ contract MarketTest is Test {
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // Warp to 1 second before period 1 boundary and have node1 execute
         uint256 period1Start = 1 + PERIOD;
@@ -1558,7 +1591,8 @@ contract MarketTest is Test {
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // Warp to exactly period 0 start (GENESIS_TS) — join at boundary
         vm.warp(1);
@@ -1586,7 +1620,8 @@ contract MarketTest is Test {
         uint256 price = 1e12;
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // --- First assignment: join at period 0 boundary, serve 1 full period, then quit ---
         vm.warp(1); // GENESIS_TS = 1, so this is period 0 boundary
@@ -1634,7 +1669,8 @@ contract MarketTest is Test {
 
         // Place order — aggregate should increase
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         assertEq(market.aggregateActiveEscrow(), totalCost, "escrow after place");
         assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn after place");
@@ -1686,7 +1722,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * periods * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -1715,7 +1752,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * periods * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         vm.prank(node1);
         market.executeOrder(orderId);
@@ -1745,7 +1783,8 @@ contract MarketTest is Test {
 
         // Place and execute an order
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 
@@ -2157,7 +2196,8 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
 
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
+        uint256 orderId =
+            market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
         vm.prank(node1);
         market.executeOrder(orderId);
 

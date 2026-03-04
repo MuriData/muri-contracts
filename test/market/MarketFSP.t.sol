@@ -78,18 +78,14 @@ contract MarketFSPTest is Test {
     function test_ValidFSPProof_PlacesOrder() public {
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            _fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof()
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(_fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof());
         assertGt(orderId, 0);
     }
 
     function test_ValidFSPProof_EscrowCorrect() public {
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
-        market.placeOrder{value: totalCost}(
-            _fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof()
-        );
+        market.placeOrder{value: totalCost}(_fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof());
         assertEq(market.aggregateActiveEscrow(), totalCost);
     }
 
@@ -100,9 +96,7 @@ contract MarketFSPTest is Test {
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
         vm.expectRevert();
-        market.placeOrder{value: totalCost}(
-            _fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, badProof
-        );
+        market.placeOrder{value: totalCost}(_fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, badProof);
     }
 
     function test_WrongNumChunks_Reverts() public {
@@ -111,23 +105,18 @@ contract MarketFSPTest is Test {
 
         vm.prank(user1);
         vm.expectRevert();
-        market.placeOrder{value: totalCost}(
-            _fspFileMeta(), wrongChunks, 4, 1, 1e12, _fspProof()
-        );
+        market.placeOrder{value: totalCost}(_fspFileMeta(), wrongChunks, 4, 1, 1e12, _fspProof());
     }
 
     function test_WrongRootHash_Reverts() public {
         MarketStorage.FileMeta memory wrongMeta = MarketStorage.FileMeta({
-            root: 0x1111111111111111111111111111111111111111111111111111111111111111,
-            uri: "QmWrongRoot"
+            root: 0x1111111111111111111111111111111111111111111111111111111111111111, uri: "QmWrongRoot"
         });
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
 
         vm.prank(user1);
         vm.expectRevert();
-        market.placeOrder{value: totalCost}(
-            wrongMeta, FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof()
-        );
+        market.placeOrder{value: totalCost}(wrongMeta, FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof());
     }
 
     function test_ValidFSPProof_FullOrderLifecycle() public {
@@ -139,9 +128,7 @@ contract MarketFSPTest is Test {
         // Place order with valid FSP proof
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(
-            _fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof()
-        );
+        uint256 orderId = market.placeOrder{value: totalCost}(_fspFileMeta(), FSP_NUM_CHUNKS, 4, 1, 1e12, _fspProof());
 
         // Execute order
         vm.prank(node1);

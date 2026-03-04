@@ -276,14 +276,14 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_ProofFailureSlash_ScalesWithOrderValue() public {
-        // 1 MB order at 1e12 price → orderPeriodCost = 1_048_576 * 1e12 = ~1.05 MURI
-        // This exceeds the 0.05 MURI floor, so per-slot slash = orderPeriodCost
+        // 1 MB order at 1e12 price → scaledSlash = 1_048_576 * 1e12 * 3 = ~3.15 MURI
+        // This exceeds the 0.15 MURI floor, so per-slot slash = scaledSlash
         // Proportional activation: 1 order → 1 slot activated
         uint32 largeSize = 1_048_576; // 1M chunks
         uint256 price = 1e12;
-        uint64 nodeCapacity = 2_097_152; // 2M chunks — avoids forced exit
-        uint256 orderPeriodCost = uint256(largeSize) * price;
-        uint256 floor = 500 * STAKE_PER_CHUNK;
+        uint64 nodeCapacity = 2_097_152 * 2; // 4M chunks — avoids forced exit with 3x multiplier
+        uint256 scaledSlash = uint256(largeSize) * price * 3; // 3x multiplier
+        uint256 floor = 1500 * STAKE_PER_CHUNK;
 
         uint256 nodeStake = uint256(nodeCapacity) * STAKE_PER_CHUNK;
         vm.deal(node1, nodeStake + 10 ether);
@@ -308,15 +308,15 @@ contract MarketChallengeTest is MarketTestBase {
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
 
-        // 1 slot targets the node → total = 1 * orderPeriodCost
-        assertEq(actualSlash, orderPeriodCost, "slash should scale with order value");
+        // 1 slot targets the node → total = 1 * scaledSlash (3x orderPeriodCost)
+        assertEq(actualSlash, scaledSlash, "slash should scale with order value * multiplier");
         assertGt(actualSlash, floor, "total slash should exceed floor");
     }
 
     function test_ProofFailureSlash_FloorForSmallOrders() public {
-        // Default order: 1024 bytes at 1e12 → orderPeriodCost = 1.024e15 < floor (5e16)
+        // Default order: 1024 bytes at 1e12 → scaledSlash = 1024 * 1e12 * 3 = 3.072e15 < floor (1.5e17)
         // Per-slot slash = floor. Proportional activation: 1 order → 1 slot.
-        uint64 nodeCapacity = 10000; // stake = 1e18, easily covers floor = 5e16
+        uint64 nodeCapacity = 10000; // stake = 1e18, easily covers floor = 1.5e17
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
@@ -335,7 +335,7 @@ contract MarketChallengeTest is MarketTestBase {
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
 
-        uint256 floor = 500 * STAKE_PER_CHUNK; // 0.05 MURI
+        uint256 floor = 1500 * STAKE_PER_CHUNK; // 0.15 MURI
         // 1 order → 1 slot activated → total = 1 * floor
         assertEq(actualSlash, floor, "small order slash should equal floor");
     }

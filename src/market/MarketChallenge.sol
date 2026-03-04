@@ -74,9 +74,8 @@ abstract contract MarketChallenge is MarketAccounting {
 
         // Cap active slots at the number of challengeable orders to avoid
         // filling multiple slots with the same order during cold-start
-        uint256 maxSlots = challengeableOrders.length < NUM_CHALLENGE_SLOTS
-            ? challengeableOrders.length
-            : NUM_CHALLENGE_SLOTS;
+        uint256 maxSlots =
+            challengeableOrders.length < NUM_CHALLENGE_SLOTS ? challengeableOrders.length : NUM_CHALLENGE_SLOTS;
 
         uint256 activated = 0;
         for (uint256 i = 0; i < maxSlots; i++) {
@@ -121,13 +120,118 @@ abstract contract MarketChallenge is MarketAccounting {
 
         // Slash full stake — compromised key means node can no longer prove data integrity
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, nodeStake);
-        _distributeSlashFunds(msg.sender, _node, totalSlashed);
+        _distributeSlashFunds(msg.sender, _node, totalSlashed, 0); // key leak is node-level, not order-specific
 
         if (forcedExit) {
             _handleForcedOrderExits(_node);
         }
 
         emit KeyLeakReported(_node, msg.sender, totalSlashed);
+    }
+
+    // =========================================================================
+    // ON-DEMAND CHALLENGES (Change 2)
+    // =========================================================================
+
+    /// @notice Issue an on-demand challenge for a specific (order, node) pair.
+    /// Anyone can call. Separate from the 5-slot automated system.
+    function challengeNode(uint256 _orderId, address _node) external nonReentrant {
+        FileOrder storage order = orders[_orderId];
+        require(order.owner != address(0), "order does not exist");
+        require(!isOrderExpired(_orderId), "order expired");
+
+        // Verify node is assigned to this order
+        address[] storage assignedNodes = orderToNodes[_orderId];
+        bool found = false;
+        for (uint256 i = 0; i < assignedNodes.length; i++) {
+            if (assignedNodes[i] == _node) {
+                found = true;
+                break;
+            }
+        }
+        require(found, "node not assigned to this order");
+
+        bytes32 key = keccak256(abi.encodePacked(_orderId, _node));
+        OnDemandChallenge storage challenge = onDemandChallenges[key];
+
+        // Cooldown: cannot re-challenge within CHALLENGE_WINDOW_BLOCKS * 3 after last deadline
+        require(
+            challenge.deadlineBlock == 0 || block.number > challenge.deadlineBlock + CHALLENGE_WINDOW_BLOCKS * 2,
+            "on-demand challenge cooldown"
+        );
+
+        uint64 deadline = uint64(block.number + CHALLENGE_WINDOW_BLOCKS);
+        uint256 randomness =
+            uint256(keccak256(abi.encodePacked(block.prevrandao, block.number, _orderId, _node))) % SNARK_SCALAR_FIELD;
+        if (randomness == 0) randomness = 1;
+
+        challenge.deadlineBlock = deadline;
+        challenge.randomness = randomness;
+        challenge.challenger = msg.sender;
+
+        emit OnDemandChallengeIssued(_orderId, _node, msg.sender, deadline);
+    }
+
+    /// @notice Submit proof for an on-demand challenge. Only the challenged node can call.
+    function submitOnDemandProof(uint256 _orderId, uint256[8] calldata _proof, bytes32 _commitment)
+        external
+        nonReentrant
+    {
+        bytes32 key = keccak256(abi.encodePacked(_orderId, msg.sender));
+        OnDemandChallenge storage challenge = onDemandChallenges[key];
+        require(challenge.deadlineBlock != 0, "no active on-demand challenge");
+        require(block.number <= challenge.deadlineBlock, "on-demand challenge expired");
+
+        // Verify ZK proof
+        FileOrder storage order = orders[_orderId];
+        require(order.owner != address(0), "order does not exist");
+
+        (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
+        require(publicKey != 0, "node public key not set");
+
+        uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, order.file.root];
+        poiVerifier.verifyProof(_proof, publicInputs);
+
+        // Clear the challenge on success
+        delete onDemandChallenges[key];
+
+        emit OnDemandProofSubmitted(_orderId, msg.sender, _commitment);
+    }
+
+    /// @notice Process an expired on-demand challenge. Anyone can call after deadline.
+    function processExpiredOnDemandChallenge(uint256 _orderId, address _node) external nonReentrant {
+        bytes32 key = keccak256(abi.encodePacked(_orderId, _node));
+        OnDemandChallenge storage challenge = onDemandChallenges[key];
+        require(challenge.deadlineBlock != 0, "no active on-demand challenge");
+        require(block.number > challenge.deadlineBlock, "on-demand challenge not expired");
+
+        address challenger = challenge.challenger;
+
+        // Clear challenge before slashing (CEI pattern)
+        delete onDemandChallenges[key];
+
+        // Apply same slash formula as slot-based challenges
+        FileOrder storage order = orders[_orderId];
+        uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
+        uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
+
+        if (nodeStaking.isValidNode(_node)) {
+            (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(_node);
+            if (slashAmount > nodeStake) {
+                slashAmount = nodeStake;
+            }
+
+            if (slashAmount > 0) {
+                (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, slashAmount);
+                _distributeSlashFunds(challenger, _node, totalSlashed, _orderId);
+                if (forcedExit) {
+                    _handleForcedOrderExits(_node);
+                }
+                emit NodeSlashed(_node, slashAmount, "failed on-demand challenge");
+            }
+        }
+
+        emit OnDemandChallengeExpired(_orderId, _node, slashAmount);
     }
 
     /// @notice Advance a slot to challenge a new random order/node.
@@ -280,10 +384,11 @@ abstract contract MarketChallenge is MarketAccounting {
 
             address failedNode = slot.challengedNode;
 
-            // Slash the failed node — proportional to order value, floored at MIN_PROOF_FAILURE_SLASH
-            FileOrder storage order = orders[slot.orderId];
-            uint256 orderPeriodCost = uint256(order.numChunks) * order.price;
-            uint256 slashAmount = orderPeriodCost > MIN_PROOF_FAILURE_SLASH ? orderPeriodCost : MIN_PROOF_FAILURE_SLASH;
+            // Slash the failed node — proportional to order value * multiplier, floored at MIN_PROOF_FAILURE_SLASH
+            uint256 slotOrderId_ = slot.orderId;
+            FileOrder storage order = orders[slotOrderId_];
+            uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
+            uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
 
             if (nodeStaking.isValidNode(failedNode)) {
                 (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
@@ -293,7 +398,7 @@ abstract contract MarketChallenge is MarketAccounting {
 
                 if (slashAmount > 0) {
                     (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(failedNode, slashAmount);
-                    _distributeSlashFunds(_reporter, failedNode, totalSlashed);
+                    _distributeSlashFunds(_reporter, failedNode, totalSlashed, slotOrderId_);
                     if (forcedExit) {
                         _handleForcedOrderExits(failedNode);
                         forcedExitCount++;

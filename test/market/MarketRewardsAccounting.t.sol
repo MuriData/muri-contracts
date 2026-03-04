@@ -42,7 +42,8 @@ contract MarketRewardsAccountingTest is MarketTestBase {
 
         uint256 reward = uint256(1024) * 1e12;
         uint256 remainingEscrow = totalCost - reward;
-        uint256 penalty = remainingEscrow / 10;
+        // Scaled penalty: 2500 - (2000 * 1 / 4) = 2000 bps → 20%
+        uint256 penalty = remainingEscrow * 2000 / 10000;
         uint256 refund = remainingEscrow - penalty;
 
         assertEq(market.nodePendingRewards(node1), reward + penalty);

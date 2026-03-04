@@ -263,7 +263,11 @@ abstract contract MarketOrders is MarketAdmin {
         uint256 remainingEscrow = escrow - withdrawn;
         uint256 refundAmount = remainingEscrow;
         if (eligibleCount > 0 && remainingEscrow > 0) {
-            uint256 penalty = remainingEscrow / 10; // 10% penalty
+            // Scaled cancellation penalty: 25% at start → 5% near end
+            uint256 elapsedPeriods = settlePeriod - order.startPeriod;
+            uint256 penaltyRange = CANCEL_PENALTY_MAX_BPS - CANCEL_PENALTY_MIN_BPS; // 2000
+            uint256 penaltyBps = CANCEL_PENALTY_MAX_BPS - (penaltyRange * elapsedPeriods / order.periods);
+            uint256 penalty = remainingEscrow * penaltyBps / 10000;
             refundAmount -= penalty;
 
             // Distribute penalty only to nodes that actually served
@@ -311,9 +315,15 @@ abstract contract MarketOrders is MarketAdmin {
         }
         require(found, "node not assigned to this order");
 
-        // Calculate slash amount (up to QUIT_SLASH_PERIODS periods of storage cost, capped at remaining)
+        // Calculate slash amount using scaled quit penalty formula
         uint256 remainingPeriods = (order.startPeriod + order.periods) - currentPeriod();
-        uint256 slashPeriods = QUIT_SLASH_PERIODS < remainingPeriods ? QUIT_SLASH_PERIODS : remainingPeriods;
+        uint256 slashPeriods;
+        if (remainingPeriods <= QUIT_SLASH_BASE_PERIODS) {
+            slashPeriods = remainingPeriods; // full remaining if short
+        } else {
+            slashPeriods =
+                QUIT_SLASH_BASE_PERIODS + (remainingPeriods - QUIT_SLASH_BASE_PERIODS) / QUIT_SLASH_EXCESS_DIVISOR;
+        }
         uint256 slashAmount = uint256(order.numChunks) * order.price * slashPeriods;
 
         // Cap to available stake to prevent revert.
@@ -328,15 +338,18 @@ abstract contract MarketOrders is MarketAdmin {
         uint64 usedAfterQuit = usedBeforeQuit - order.numChunks;
         uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * STAKE_PER_CHUNK;
         uint256 maxSafeSlash = nodeStake > requiredStakeAfterQuit ? nodeStake - requiredStakeAfterQuit : 0;
-        require(slashAmount <= maxSafeSlash, "insufficient collateral for quit slash");
+        // Cap at maxSafeSlash instead of reverting — lets trapped nodes exit
+        if (slashAmount > maxSafeSlash) {
+            slashAmount = maxSafeSlash;
+        }
 
         // Remove the specific assignment first so slashing cannot be used as a
         // cheap path to force-exit unrelated orders.
         _removeNodeFromOrder(msg.sender, _orderId, nodeIndex);
 
-        // Apply slash to node's stake (no reporter reward for voluntary quit)
+        // Apply slash to node's stake (no reporter reward or client comp for voluntary quit)
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(msg.sender, slashAmount);
-        _distributeSlashFunds(address(0), msg.sender, totalSlashed);
+        _distributeSlashFunds(address(0), msg.sender, totalSlashed, 0);
 
         require(!forcedOrderExit, "quit caused forced exit");
 
@@ -353,7 +366,7 @@ abstract contract MarketOrders is MarketAdmin {
 
         // No reporter reward for authority slashes
         (bool forcedOrderExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, _slashAmount);
-        _distributeSlashFunds(address(0), _node, totalSlashed);
+        _distributeSlashFunds(address(0), _node, totalSlashed, 0);
 
         if (forcedOrderExit) {
             _handleForcedOrderExits(_node);
@@ -631,11 +644,14 @@ abstract contract MarketOrders is MarketAdmin {
         nodeEarnings[_node] += claimableFromOrder;
     }
 
-    /// @notice Distribute slashed funds: reporter gets a percentage, rest is burned
+    /// @notice Distribute slashed funds: reporter gets a percentage, client gets compensation, rest is burned
     /// @param reporter The address that reported the failure (address(0) for no reward)
     /// @param slashedNode The address of the node being slashed (reporter reward skipped if same as reporter)
     /// @param totalSlashed The total slashed amount received from NodeStaking
-    function _distributeSlashFunds(address reporter, address slashedNode, uint256 totalSlashed) internal {
+    /// @param affectedOrderId The order whose client should receive compensation (0 for non-order-specific slashes)
+    function _distributeSlashFunds(address reporter, address slashedNode, uint256 totalSlashed, uint256 affectedOrderId)
+        internal
+    {
         if (totalSlashed == 0) return;
 
         totalSlashedReceived += totalSlashed;
@@ -651,7 +667,20 @@ abstract contract MarketOrders is MarketAdmin {
             }
         }
 
-        uint256 burnAmount = totalSlashed - reporterReward;
+        uint256 clientComp = 0;
+        if (affectedOrderId != 0) {
+            address client = orders[affectedOrderId].owner;
+            if (client != address(0) && clientCompensationBps > 0) {
+                clientComp = totalSlashed * clientCompensationBps / 10000;
+                if (clientComp > 0) {
+                    pendingRefunds[client] += clientComp;
+                    totalClientCompensation += clientComp;
+                    emit ClientCompensationAccrued(client, clientComp, affectedOrderId);
+                }
+            }
+        }
+
+        uint256 burnAmount = totalSlashed - reporterReward - clientComp;
         totalBurnedFromSlash += burnAmount;
         if (burnAmount > 0) {
             payable(address(0)).transfer(burnAmount);

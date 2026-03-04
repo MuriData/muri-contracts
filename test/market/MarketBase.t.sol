@@ -56,9 +56,7 @@ abstract contract MarketTestBase is Test {
 
         // Mock FSP verifier to always succeed so existing tests don't need valid proofs
         vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyProof.selector),
-            abi.encode()
+            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
         );
 
         vm.deal(user1, 100 ether);
@@ -93,7 +91,8 @@ abstract contract MarketTestBase is Test {
     {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         vm.prank(owner_);
-        orderId = market.placeOrder{value: totalCost}(_fileMeta(), numChunks, periods, replicas, price, _emptyFspProof());
+        orderId =
+            market.placeOrder{value: totalCost}(_fileMeta(), numChunks, periods, replicas, price, _emptyFspProof());
     }
 
     function _placeDefaultOrder(address owner_, uint8 replicas) internal returns (uint256 orderId, uint256 totalCost) {

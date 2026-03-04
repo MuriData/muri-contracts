@@ -12,7 +12,8 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 internal constant PERIOD = 7 days; // single billing unit
     uint256 internal constant EPOCH = 4 * PERIOD;
-    uint256 internal constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
+    uint256 internal constant QUIT_SLASH_BASE_PERIODS = 4; // base periods charged on voluntary quit (full slash if remaining <= this)
+    uint256 internal constant QUIT_SLASH_EXCESS_DIVISOR = 4; // 25% of remaining periods beyond base
     uint256 internal constant MAX_ORDERS_PER_NODE = 50; // cap orders per node to bound forced-exit iteration
     uint8 internal constant MAX_REPLICAS = 10; // cap replicas per order to bound settlement loop gas
     uint256 internal constant CLEANUP_BATCH_SIZE = 10; // expired orders processed per cleanup call
@@ -55,6 +56,13 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         address challengedNode; // node that must submit proof       — Slot 1 (20 bytes)
         uint64 deadlineBlock; // block.number deadline               — Slot 1 (packed, +8 bytes)
         uint256 randomness; // per-slot randomness for proof verification — Slot 2
+    }
+
+    // On-demand challenge struct for client-triggered challenges
+    struct OnDemandChallenge {
+        uint64 deadlineBlock; // block.number deadline
+        uint256 randomness; // randomness for proof verification
+        address challenger; // who issued the challenge
     }
 
     // Order management
@@ -105,11 +113,14 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     // For larger files or slower hardware, consider increasing this value.
     // GPU-accelerated proving (icicle-gnark) reduces proving to ~1-2s.
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
-    uint256 public constant MIN_PROOF_FAILURE_SLASH = 500 * STAKE_PER_CHUNK; // floor for proof-failure slash
+    uint256 public constant MIN_PROOF_FAILURE_SLASH = 1500 * STAKE_PER_CHUNK; // floor for proof-failure slash (0.15 MURI)
+    uint256 public constant MAX_PROOF_FAILURE_SLASH_MULTIPLIER = 10; // cap for admin-tunable multiplier
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
     uint256 internal constant STAKE_PER_CHUNK = 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
+    uint256 public constant CANCEL_PENALTY_MAX_BPS = 2500; // 25% at order start
+    uint256 public constant CANCEL_PENALTY_MIN_BPS = 500; // 5% near order end
     ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
     bool public challengeSlotsInitialized;
     uint256 public globalSeedRandomness; // rolling seed for bootstrapping slot randomness
@@ -136,8 +147,15 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     // Cold-start: block number before which challenges are suppressed
     uint256 public challengeStartBlock;
 
-    // Reserve 200 slots for future storage variables
-    uint256[200] private __gap;
+    // --- Economic redesign storage (Change 1, 2, 5) ---
+    uint256 public proofFailureSlashMultiplier; // multiplier for challenge failure slash (default 3)
+    uint256 public clientCompensationBps; // basis points of slash going to affected client (default 2000 = 20%)
+    uint256 public constant MAX_CLIENT_COMPENSATION_BPS = 5000; // cap at 50%
+    uint256 public totalClientCompensation; // aggregate client compensation distributed
+    mapping(bytes32 => OnDemandChallenge) public onDemandChallenges; // keccak256(orderId, node) => challenge
+
+    // Reserve 196 slots for future storage variables (200 - 4 new slots)
+    uint256[196] private __gap;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
@@ -159,6 +177,18 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     event RefundWithdrawn(address indexed recipient, uint256 amount);
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
     event KeyLeakReported(address indexed node, address indexed reporter, uint256 slashAmount);
+
+    // Client compensation events
+    event ClientCompensationAccrued(address indexed client, uint256 amount, uint256 orderId);
+    event ClientCompensationBpsUpdated(uint256 oldBps, uint256 newBps);
+    event ProofFailureSlashMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier);
+
+    // On-demand challenge events
+    event OnDemandChallengeIssued(
+        uint256 indexed orderId, address indexed node, address challenger, uint256 deadlineBlock
+    );
+    event OnDemandProofSubmitted(uint256 indexed orderId, address indexed node, bytes32 commitment);
+    event OnDemandChallengeExpired(uint256 indexed orderId, address indexed node, uint256 slashAmount);
 
     // Challenge slot events
     event SlotChallengeIssued(
@@ -191,6 +221,8 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         _marketLock = 1;
         nextOrderId = 1;
         reporterRewardBps = 1000; // 10% default (basis points)
+        proofFailureSlashMultiplier = 3; // 3x order period cost for challenge failure
+        clientCompensationBps = 2000; // 20% of slash to affected client
     }
 
     modifier onlyOwner() {
