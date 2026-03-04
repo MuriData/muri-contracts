@@ -234,10 +234,10 @@ contract MarketChallengeTest is MarketTestBase {
         vm.prank(node3);
         market.executeOrder(order3);
 
-        // Activate all 5 challenge slots from 3 pairs
+        // Activate challenge slots — proportional cap limits to min(5, 3) = 3 slots
         market.activateSlots();
 
-        // Collect which orders and nodes were assigned across all 5 slots
+        // Collect which orders and nodes were assigned across the 3 active slots
         bool hasOrder1;
         bool hasOrder2;
         bool hasOrder3;
@@ -245,9 +245,9 @@ contract MarketChallengeTest is MarketTestBase {
         bool hasNode2;
         bool hasNode3;
 
-        for (uint256 i = 0; i < 5; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(i);
-            // Every slot must be active (3 pairs available, 5 slots)
+            // Slots 0–2 must be active (3 challengeable orders → 3 slots)
             assertGt(slotOrderId, 0, "slot should be active");
 
             if (slotOrderId == order1) hasOrder1 = true;
@@ -257,6 +257,12 @@ contract MarketChallengeTest is MarketTestBase {
             if (slotNode == node2) hasNode2 = true;
             if (slotNode == node3) hasNode3 = true;
         }
+
+        // Slots 3–4 should be idle (capped by challengeable order count)
+        (uint256 slot3OrderId,,,,) = market.getSlotInfo(3);
+        (uint256 slot4OrderId,,,,) = market.getSlotInfo(4);
+        assertEq(slot3OrderId, 0, "slot 3 should be idle");
+        assertEq(slot4OrderId, 0, "slot 4 should be idle");
 
         // All 3 orders must appear before any gets a second slot
         assertTrue(hasOrder1, "order1 should be covered");
@@ -272,7 +278,7 @@ contract MarketChallengeTest is MarketTestBase {
     function test_ProofFailureSlash_ScalesWithOrderValue() public {
         // 1 MB order at 1e12 price → orderPeriodCost = 1_048_576 * 1e12 = ~1.05 MURI
         // This exceeds the 0.05 MURI floor, so per-slot slash = orderPeriodCost
-        // Use 2x capacity so no forced exits occur from the 5 simultaneous slot slashes
+        // Proportional activation: 1 order → 1 slot activated
         uint32 largeSize = 1_048_576; // 1M chunks
         uint256 price = 1e12;
         uint64 nodeCapacity = 2_097_152; // 2M chunks — avoids forced exit
@@ -293,7 +299,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
-        // Expire all 5 challenge slots
+        // Expire the challenge slot (1 order → 1 slot activated)
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
@@ -302,15 +308,15 @@ contract MarketChallengeTest is MarketTestBase {
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
 
-        // All 5 slots target the same node → total = 5 * orderPeriodCost
-        assertEq(actualSlash, 5 * orderPeriodCost, "slash should scale with order value");
-        assertGt(actualSlash, 5 * floor, "total slash should exceed 5x floor");
+        // 1 slot targets the node → total = 1 * orderPeriodCost
+        assertEq(actualSlash, orderPeriodCost, "slash should scale with order value");
+        assertGt(actualSlash, floor, "total slash should exceed floor");
     }
 
     function test_ProofFailureSlash_FloorForSmallOrders() public {
         // Default order: 1024 bytes at 1e12 → orderPeriodCost = 1.024e15 < floor (5e16)
-        // Per-slot slash = floor. Use large capacity so node survives all 5 slashes.
-        uint64 nodeCapacity = 10000; // stake = 1e18, easily covers 5 * floor = 2.5e17
+        // Per-slot slash = floor. Proportional activation: 1 order → 1 slot.
+        uint64 nodeCapacity = 10000; // stake = 1e18, easily covers floor = 5e16
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
@@ -330,8 +336,8 @@ contract MarketChallengeTest is MarketTestBase {
         uint256 actualSlash = stakeBefore - stakeAfter;
 
         uint256 floor = 500 * STAKE_PER_CHUNK; // 0.05 MURI
-        // All 5 slots target the same node → total = 5 * floor
-        assertEq(actualSlash, 5 * floor, "small order slash should equal 5x floor");
+        // 1 order → 1 slot activated → total = 1 * floor
+        assertEq(actualSlash, floor, "small order slash should equal floor");
     }
 
     function test_ProofFailureSlash_CappedByNodeStake() public {

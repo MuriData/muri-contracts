@@ -58,6 +58,9 @@ abstract contract MarketChallenge is MarketAccounting {
     /// @notice Bootstrap or refill idle challenge slots with challengeable orders.
     /// Anyone can call. First call initializes globalSeedRandomness.
     function activateSlots() external nonReentrant {
+        // Grace period: suppress challenges until challengeStartBlock
+        if (challengeStartBlock > 0 && block.number < challengeStartBlock) return;
+
         // Bootstrap randomness on first call
         if (!challengeSlotsInitialized) {
             globalSeedRandomness = uint256(
@@ -69,8 +72,14 @@ abstract contract MarketChallenge is MarketAccounting {
         // Clean up expired orders before filling slots
         _cleanupExpiredOrders();
 
+        // Cap active slots at the number of challengeable orders to avoid
+        // filling multiple slots with the same order during cold-start
+        uint256 maxSlots = challengeableOrders.length < NUM_CHALLENGE_SLOTS
+            ? challengeableOrders.length
+            : NUM_CHALLENGE_SLOTS;
+
         uint256 activated = 0;
-        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+        for (uint256 i = 0; i < maxSlots; i++) {
             if (challengeSlots[i].orderId != 0) continue; // slot already active
 
             // Derive per-slot randomness from global seed

@@ -2,10 +2,13 @@
 pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../src/Market.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 import {MarketStorage} from "../src/market/MarketStorage.sol";
+import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
 import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
+import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 
 contract MarketTest is Test {
     // Re-declare events for vm.expectEmit
@@ -31,9 +34,28 @@ contract MarketTest is Test {
     string public constant FILE_URI = "QmTestHash123";
 
     function setUp() public {
-        // Deploy market contract
-        market = new FileMarket();
-        nodeStaking = market.nodeStaking();
+        // Deploy verifiers
+        Verifier poiVerifier = new Verifier();
+        FspVerifier fspVerifier = new FspVerifier();
+        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
+
+        // Deploy NodeStaking impl + proxy (uninitialized)
+        NodeStaking stakingImpl = new NodeStaking();
+        ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
+
+        // Deploy FileMarket impl + proxy (initialized)
+        FileMarket marketImpl = new FileMarket();
+        bytes memory marketInitData = abi.encodeCall(
+            FileMarket.initialize,
+            (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
+        );
+        ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
+
+        // Initialize NodeStaking with market proxy
+        NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
+
+        market = FileMarket(payable(address(marketProxy)));
+        nodeStaking = NodeStaking(address(stakingProxy));
 
         // Mock FSP verifier to always succeed so tests don't need valid proofs
         vm.mockCall(
@@ -1843,15 +1865,15 @@ contract MarketTest is Test {
     uint256 constant ZK_PROOF_7 = 0x073a1b7f939f13c0a538bcfb8e8c5c31c71e7e31d7d388423834cc1f20b93a56;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
-    // challengeSlots[5] starts at slot 26, each ChallengeSlot = 3 words (packed)
-    // slot 26: challengeSlots[0].orderId
-    // slot 27: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
-    // slot 28: challengeSlots[0].randomness
-    uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 26;
-    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 41;
-    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 42;
-    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 43;
-    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 44;
+    // challengeSlots[5] starts at slot 31, each ChallengeSlot = 3 words (packed)
+    // slot 31: challengeSlots[0].orderId
+    // slot 32: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
+    // slot 33: challengeSlots[0].randomness
+    uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 31;
+    uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 46;
+    uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 47;
+    uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 48;
+    uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 49;
 
     function _zkProof() internal pure returns (uint256[8] memory proof) {
         proof[0] = ZK_PROOF_0;
@@ -2012,8 +2034,8 @@ contract MarketTest is Test {
         _setupZKSlotChallenge(node3, orderId);
 
         // Zero out the public key via storage
-        // nodes mapping is at slot 0 in NodeStaking, NodeInfo has: stake(+0), capacity+used(+1), publicKey(+2)
-        bytes32 nodeInfoBase = keccak256(abi.encode(node3, uint256(0)));
+        // nodes mapping is at slot 1 in NodeStaking (slot 0 = market address), NodeInfo has: stake(+0), capacity+used(+1), publicKey(+2)
+        bytes32 nodeInfoBase = keccak256(abi.encode(node3, uint256(1)));
         vm.store(address(nodeStaking), bytes32(uint256(nodeInfoBase) + 2), bytes32(uint256(0)));
 
         uint256[8] memory proof = _zkProof();

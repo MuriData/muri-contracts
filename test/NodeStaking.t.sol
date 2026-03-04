@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 
 contract NodeStakingTest is Test {
@@ -25,9 +26,17 @@ contract NodeStakingTest is Test {
         return false;
     }
 
+    // Implement IMarketOwner so NodeStaking._authorizeUpgrade can check ownership
+    function owner() external view returns (address) {
+        return address(this);
+    }
+
     function setUp() public {
-        // Set the test contract as the authorized market so tests can call updateNodeUsed
-        nodeStaking = new NodeStaking(address(this));
+        // Deploy NodeStaking via proxy with test contract as market
+        NodeStaking stakingImpl = new NodeStaking();
+        ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
+        NodeStaking(address(stakingProxy)).initialize(address(this));
+        nodeStaking = NodeStaking(address(stakingProxy));
 
         // Give test addresses some MURI
         vm.deal(node1, 100 ether);
@@ -353,11 +362,18 @@ contract NodeStakingTest is Test {
         assertEq(marketBalanceAfter - marketBalanceBefore, slashAmount, "slashed funds sent to market");
     }
 
-    // ===== CONSTRUCTOR TESTS =====
+    // ===== INITIALIZER TESTS =====
 
-    function test_Constructor_RevertInvalidMarket() public {
+    function test_Initialize_RevertInvalidMarket() public {
+        NodeStaking impl = new NodeStaking();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), "");
         vm.expectRevert("invalid market");
-        new NodeStaking(address(0));
+        NodeStaking(address(proxy)).initialize(address(0));
+    }
+
+    function test_Initialize_RevertDoubleInit() public {
+        vm.expectRevert();
+        nodeStaking.initialize(address(this));
     }
 
     // ===== PUBLIC KEY VALIDATION =====

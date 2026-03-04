@@ -5,9 +5,11 @@ import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
 import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
 import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 import {NodeStaking} from "../NodeStaking.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /// @notice Shared storage, constants, modifiers, and events for FileMarket modules.
-abstract contract MarketStorage {
+abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 internal constant PERIOD = 7 days; // single billing unit
     uint256 internal constant EPOCH = 4 * PERIOD;
     uint256 internal constant QUIT_SLASH_PERIODS = 3; // periods of storage cost charged on voluntary quit
@@ -18,10 +20,17 @@ abstract contract MarketStorage {
     uint256 internal constant MAX_CHALLENGE_SELECTION_PROBES = 200; // cap non-eviction probes in challenge selection
     uint256 internal constant MAX_DEDUP_PROBES = 10; // extra probes after first valid candidate to find a fresh pair
     uint256 internal constant MAX_CHALLENGE_EVICTIONS = 50; // max expired-order evictions per selection call
-    uint256 internal immutable GENESIS_TS; // contract deploy timestamp
+
+    // --- Former immutables, now regular storage (slots 0–4) ---
+    uint256 public genesisTs;
+    NodeStaking public nodeStaking;
+    Verifier public poiVerifier;
+    FspVerifier public fspVerifier;
+    KeyLeakVerifier public keyleakVerifier;
+
     address public owner;
     mapping(address => bool) public slashAuthorities;
-    uint256 private _marketLock = 1;
+    uint256 private _marketLock;
 
     struct FileMeta {
         uint256 root; // Merkle root hash of the file for POI verification
@@ -48,20 +57,8 @@ abstract contract MarketStorage {
         uint256 randomness; // per-slot randomness for proof verification — Slot 2
     }
 
-    // Staking contract for managing node stakes and capacity
-    NodeStaking public immutable nodeStaking;
-
-    // Proof of Integrity verifier contract
-    Verifier public immutable poiVerifier;
-
-    // File Size Proof verifier contract
-    FspVerifier public immutable fspVerifier;
-
-    // Key leak PLONK verifier contract
-    KeyLeakVerifier public immutable keyleakVerifier;
-
     // Order management
-    uint256 public nextOrderId = 1;
+    uint256 public nextOrderId;
     mapping(uint256 => FileOrder) public orders;
     uint256[] public activeOrders; // Array of active order IDs for random selection
     mapping(uint256 => uint256) public orderIndexInActive; // Maps order ID to its index in activeOrders
@@ -85,7 +82,7 @@ abstract contract MarketStorage {
     mapping(uint256 => mapping(address => uint256)) public nodeOrderEarnings; // orderId -> node -> earned amount
 
     // Reporter reward system for slash redistribution
-    uint256 public reporterRewardBps = 1000; // 10% default (basis points)
+    uint256 public reporterRewardBps;
     uint256 public constant MAX_REPORTER_REWARD_BPS = 5000; // cap at 50%
     mapping(address => uint256) public reporterPendingRewards;
     mapping(address => uint256) public reporterEarnings;
@@ -136,6 +133,12 @@ abstract contract MarketStorage {
     uint256 public lifetimeEscrowDeposited; // cumulative escrow deposited across all orders ever placed
     uint256 public lifetimeRewardsPaid; // cumulative escrow paid to nodes as rewards
 
+    // Cold-start: block number before which challenges are suppressed
+    uint256 public challengeStartBlock;
+
+    // Reserve 200 slots for future storage variables
+    uint256[200] private __gap;
+
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
 
@@ -167,13 +170,27 @@ abstract contract MarketStorage {
     event SlotsActivated(uint256 activatedCount);
     event ExpiredSlotsProcessed(uint256 processedCount, address indexed reporter);
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        GENESIS_TS = block.timestamp;
-        owner = msg.sender;
-        nodeStaking = new NodeStaking(address(this));
-        poiVerifier = new Verifier();
-        fspVerifier = new FspVerifier();
-        keyleakVerifier = new KeyLeakVerifier();
+        _disableInitializers();
+    }
+
+    function __MarketStorage_init(
+        address _owner,
+        address _nodeStaking,
+        address _poiVerifier,
+        address _fspVerifier,
+        address _keyleakVerifier
+    ) internal onlyInitializing {
+        owner = _owner;
+        nodeStaking = NodeStaking(_nodeStaking);
+        poiVerifier = Verifier(_poiVerifier);
+        fspVerifier = FspVerifier(_fspVerifier);
+        keyleakVerifier = KeyLeakVerifier(_keyleakVerifier);
+        genesisTs = block.timestamp;
+        _marketLock = 1;
+        nextOrderId = 1;
+        reporterRewardBps = 1000; // 10% default (basis points)
     }
 
     modifier onlyOwner() {

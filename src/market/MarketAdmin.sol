@@ -16,11 +16,15 @@ abstract contract MarketAdmin is MarketStorage {
         emit SlashAuthorityUpdated(_authority, _allowed);
     }
 
+    function setChallengeStartBlock(uint256 _block) external onlyOwner {
+        challengeStartBlock = _block;
+    }
+
     function currentPeriod() public view returns (uint256) {
-        return (block.timestamp - GENESIS_TS) / PERIOD;
+        return (block.timestamp - genesisTs) / PERIOD;
     }
 
     function currentEpoch() public view returns (uint256) {
-        return (block.timestamp - GENESIS_TS) / EPOCH;
+        return (block.timestamp - genesisTs) / EPOCH;
     }
 }

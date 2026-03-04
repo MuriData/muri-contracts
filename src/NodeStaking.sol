@@ -1,18 +1,36 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+
 interface IMarketProverCheck {
     function hasUnresolvedProofObligation(address node) external view returns (bool);
 }
 
-contract NodeStaking {
+interface IMarketOwner {
+    function owner() external view returns (address);
+}
+
+contract NodeStaking is Initializable, UUPSUpgradeable {
     // The only contract authorized to update node usage.
-    address public immutable market;
+    address public market;
     address payable public constant BURN_ADDRESS = payable(address(0));
 
-    constructor(address _market) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address _market) external initializer {
         require(_market != address(0), "invalid market");
+        __UUPSUpgradeable_init();
         market = _market;
+        _locked = 1;
+    }
+
+    function _authorizeUpgrade(address) internal override {
+        require(msg.sender == IMarketOwner(market).owner(), "not market owner");
     }
 
     modifier onlyMarket() {
@@ -45,7 +63,10 @@ contract NodeStaking {
     // ------------------------------------------------------------------
     // Reentrancy guard
     // ------------------------------------------------------------------
-    uint256 private _locked = 1;
+    uint256 private _locked;
+
+    // Reserve 200 slots for future storage variables
+    uint256[200] private __gap;
 
     modifier nonReentrant() {
         require(_locked == 1, "reentrant");

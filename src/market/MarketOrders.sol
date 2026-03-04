@@ -247,7 +247,7 @@ abstract contract MarketOrders is MarketAdmin {
         address[] memory eligibleNodes = new address[](assignedNodes.length);
         for (uint256 i = 0; i < assignedNodes.length; i++) {
             uint256 startTs = nodeOrderStartTimestamp[assignedNodes[i]][_orderId];
-            uint256 elapsed = startTs - GENESIS_TS;
+            uint256 elapsed = startTs - genesisTs;
             uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
             if (settlePeriod > nodeStartPeriod) {
                 eligibleNodes[eligibleCount] = assignedNodes[i];
@@ -597,7 +597,7 @@ abstract contract MarketOrders is MarketAdmin {
         // for periods they were assigned for the ENTIRE duration, preventing
         // boundary-sniping (joining 1 second before a period flip for a full payout).
         uint256 startTs = nodeOrderStartTimestamp[_node][_orderId];
-        uint256 elapsed = startTs - GENESIS_TS;
+        uint256 elapsed = startTs - genesisTs;
         uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
 
         uint256 orderEndPeriod = order.startPeriod + order.periods;

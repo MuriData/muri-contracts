@@ -2,10 +2,13 @@
 pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../../src/Market.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {MarketStorage} from "../../src/market/MarketStorage.sol";
+import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
 import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
+import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 
 /// @notice FSP (File Size Proof) integration tests using real proof fixture.
 /// These tests do NOT mock the FSP verifier — they use the actual Groth16 verifier
@@ -39,8 +42,35 @@ contract MarketFSPTest is Test {
     }
 
     function setUp() public {
-        market = new FileMarket();
-        nodeStaking = market.nodeStaking();
+        // Deploy verifiers
+        Verifier poiVerifier = new Verifier();
+        FspVerifier fspVerifierContract = new FspVerifier();
+        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
+
+        // Deploy NodeStaking impl + proxy (uninitialized)
+        NodeStaking stakingImpl = new NodeStaking();
+        ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
+
+        // Deploy FileMarket impl + proxy (initialized)
+        FileMarket marketImpl = new FileMarket();
+        bytes memory marketInitData = abi.encodeCall(
+            FileMarket.initialize,
+            (
+                address(this),
+                address(stakingProxy),
+                address(poiVerifier),
+                address(fspVerifierContract),
+                address(keyleakVerifier)
+            )
+        );
+        ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
+
+        // Initialize NodeStaking with market proxy
+        NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
+
+        market = FileMarket(payable(address(marketProxy)));
+        nodeStaking = NodeStaking(address(stakingProxy));
+
         vm.deal(user1, 100 ether);
         vm.deal(node1, 100 ether);
     }
