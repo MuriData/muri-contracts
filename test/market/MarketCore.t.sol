@@ -40,8 +40,7 @@ contract MarketCoreTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (,, uint64 used,) = nodeStaking.getNodeInfo(node1);
         assertEq(used, 1024);
@@ -62,7 +61,7 @@ contract MarketCoreTest is MarketTestBase {
 
         vm.prank(user2);
         vm.expectRevert("not a valid node");
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
     }
 
     function test_RevertWhen_ExecuteOrder_DuplicateAssignment() public {
@@ -70,9 +69,9 @@ contract MarketCoreTest is MarketTestBase {
         (uint256 orderId,) = _placeOrder(user1, 256, 4, 2, 1e12);
 
         vm.startPrank(node1);
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
         vm.expectRevert("already assigned to this order");
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
         vm.stopPrank();
     }
 
@@ -95,8 +94,7 @@ contract MarketCoreTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, 1024, 1, 1, 1e12);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
         vm.prank(address(0xBEEF));
@@ -117,8 +115,7 @@ contract MarketCoreTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.expectEmit(true, false, false, true);
         emit OrderUnderReplicated(orderId, 0, 1);
@@ -145,8 +142,7 @@ contract MarketCoreTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.setSlashAuthority(user2, true);
 

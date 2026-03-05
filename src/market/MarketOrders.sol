@@ -58,8 +58,11 @@ abstract contract MarketOrders is MarketAdmin {
         }
     }
 
-    // Node executes an order (claims a replica slot)
-    function executeOrder(uint256 _orderId) external nonReentrant {
+    // Node executes an order (claims a replica slot) with PoI proof of data possession
+    function executeOrder(uint256 _orderId, uint256[8] calldata _proof, bytes32 _commitment)
+        external
+        nonReentrant
+    {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
 
         FileOrder storage order = orders[_orderId];
@@ -76,6 +79,13 @@ abstract contract MarketOrders is MarketAdmin {
 
         // Enforce per-node order cap to bound forced-exit iteration
         require(nodeToOrders[msg.sender].length < MAX_ORDERS_PER_NODE, "max orders per node reached");
+
+        // Verify PoI proof — node must prove data possession before claiming slot
+        (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
+        require(publicKey != 0, "node public key not set");
+        uint256 randomness = uint256(keccak256(abi.encodePacked(order.file.root, publicKey))) % SNARK_SCALAR_FIELD;
+        uint256[4] memory publicInputs = [uint256(_commitment), randomness, publicKey, order.file.root];
+        poiVerifier.verifyProof(_proof, publicInputs);
 
         // Assign node to order
         assignedNodes.push(msg.sender);

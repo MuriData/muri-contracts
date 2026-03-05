@@ -23,7 +23,7 @@ abstract contract MarketViews is MarketChallenge {
         view
         returns (uint256 orderId, address challengedNode, uint256 randomness, uint256 deadlineBlock, bool isExpired)
     {
-        require(_slotIndex < NUM_CHALLENGE_SLOTS, "invalid slot index");
+        require(_slotIndex < numChallengeSlots, "invalid slot index");
         ChallengeSlot storage slot = challengeSlots[_slotIndex];
         orderId = slot.orderId;
         challengedNode = slot.challengedNode;
@@ -37,14 +37,20 @@ abstract contract MarketViews is MarketChallenge {
         external
         view
         returns (
-            uint256[5] memory orderIds,
-            address[5] memory challengedNodes,
-            uint256[5] memory randomnesses,
-            uint256[5] memory deadlineBlocks,
-            bool[5] memory isExpired
+            uint256[] memory orderIds,
+            address[] memory challengedNodes,
+            uint256[] memory randomnesses,
+            uint256[] memory deadlineBlocks,
+            bool[] memory isExpired
         )
     {
-        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+        uint256 slotCount = numChallengeSlots;
+        orderIds = new uint256[](slotCount);
+        challengedNodes = new address[](slotCount);
+        randomnesses = new uint256[](slotCount);
+        deadlineBlocks = new uint256[](slotCount);
+        isExpired = new bool[](slotCount);
+        for (uint256 i = 0; i < slotCount; i++) {
             ChallengeSlot storage slot = challengeSlots[i];
             orderIds[i] = slot.orderId;
             challengedNodes[i] = slot.challengedNode;
@@ -109,7 +115,7 @@ abstract contract MarketViews is MarketChallenge {
         currentRandomnessValue = globalSeedRandomness;
 
         // Count active slots
-        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+        for (uint256 i = 0; i < numChallengeSlots; i++) {
             if (challengeSlots[i].orderId != 0) {
                 activeChallengeSlots++;
             }
@@ -189,14 +195,16 @@ abstract contract MarketViews is MarketChallenge {
             uint256 expiredSlotsCount,
             uint256 currentBlockNumber,
             uint256 challengeWindowBlocks,
-            uint256 challengeableOrdersCount
+            uint256 challengeableOrdersCount,
+            uint256 totalSlotsCount
         )
     {
         currentBlockNumber = block.number;
         challengeWindowBlocks = CHALLENGE_WINDOW_BLOCKS;
         challengeableOrdersCount = challengeableOrders.length;
+        totalSlotsCount = numChallengeSlots;
 
-        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS; i++) {
+        for (uint256 i = 0; i < numChallengeSlots; i++) {
             if (challengeSlots[i].orderId == 0) {
                 idleSlotsCount++;
             } else if (block.number > challengeSlots[i].deadlineBlock) {

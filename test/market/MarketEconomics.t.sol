@@ -26,8 +26,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeOrder(user1, size, 4, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         market.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
@@ -49,8 +48,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         market.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
@@ -93,8 +91,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Anyone can issue an on-demand challenge
         vm.prank(user2);
@@ -125,8 +122,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // First challenge
         market.challengeNode(orderId, node1);
@@ -142,8 +138,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // First challenge
         market.challengeNode(orderId, node1);
@@ -162,8 +157,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.prank(user2);
         market.challengeNode(orderId, node1);
@@ -200,8 +194,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.challengeNode(orderId, node1);
 
@@ -213,8 +206,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeOrder(user1, 256, 1, 1, 1e12);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Expire the order
         vm.warp(block.timestamp + PERIOD + 1);
@@ -239,8 +231,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId,) = _placeOrder(user1, maxSize, 1, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.prank(node1);
@@ -263,8 +254,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId,) = _placeOrder(user1, maxSize, 4, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.prank(node1);
@@ -287,8 +277,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId,) = _placeOrder(user1, maxSize, 20, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.prank(node1);
@@ -311,8 +300,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId,) = _placeOrder(user1, maxSize, 52, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.prank(node1);
@@ -360,8 +348,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, maxSize, periods, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Warp exactly 1 period so node is eligible for penalty
         vm.warp(block.timestamp + PERIOD);
@@ -386,8 +373,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, maxSize, periods, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Warp 2 periods (50% completion)
         vm.warp(block.timestamp + PERIOD * 2);
@@ -410,8 +396,7 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 price = 1e12;
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, maxSize, periods, 1, price);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Warp 3 periods (75% completion)
         vm.warp(block.timestamp + PERIOD * 3);
@@ -456,8 +441,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node2, 0xABCD);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.activateSlots();
 
@@ -486,8 +470,7 @@ contract MarketEconomicsTest is MarketTestBase {
         nodeStaking.stakeNode{value: largeStake}(largeCapacity, 0x1234);
 
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         uint256 clientRefundBefore = market.pendingRefunds(user1);
         vm.prank(node1);
@@ -520,8 +503,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         market.activateSlots();
 
         uint256 clientRefundBefore = market.pendingRefunds(user1);
@@ -539,8 +521,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeDefaultNode(node2, 0xABCD);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         market.activateSlots();
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
@@ -575,10 +556,8 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId1,) = _placeOrder(user1, maxSize, periods, 1, price);
         (uint256 orderId2,) = _placeOrder(user1, maxSize, periods, 1, price);
 
-        vm.startPrank(node1);
-        market.executeOrder(orderId1);
-        market.executeOrder(orderId2);
-        vm.stopPrank();
+        _executeOrder(node1, orderId1);
+        _executeOrder(node1, orderId2);
 
         // Quit order1: slashPeriods = 4 + (20-4)/4 = 8
         // slashAmount = 256 * 1e12 * 8 = 2048e12
@@ -622,10 +601,8 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 orderId2 =
             market.placeOrder{value: cost2}(fileMeta, uint32(maxSize), periods, 1, highPrice, _emptyFspProof());
 
-        vm.startPrank(node1);
-        market.executeOrder(orderId1);
-        market.executeOrder(orderId2);
-        vm.stopPrank();
+        _executeOrder(node1, orderId1);
+        _executeOrder(node1, orderId2);
 
         // Quit order2 (highPrice): slashPeriods = 4 + (20-4)/4 = 8
         // slashAmount = 100 * 1e14 * 8 = 8e16
@@ -655,8 +632,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _stakeNode(node1, nodeCapacity, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         uint256 clientRefundBefore = market.pendingRefunds(user1);
 

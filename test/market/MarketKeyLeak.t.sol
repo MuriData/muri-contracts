@@ -57,8 +57,7 @@ contract MarketKeyLeakTest is MarketTestBase {
 
         // Place and execute an order so node1 has an active assignment
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.prank(KL_REPORTER);
         market.reportKeyLeak(node1, KL_PROOF);

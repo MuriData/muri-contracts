@@ -8,8 +8,7 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeOrder(user1, 1024, 1, 1, 1e12);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
 
@@ -32,8 +31,7 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId, uint256 totalCost) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD);
 
@@ -93,8 +91,7 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         _stakeDefaultNode(node2, 0xABCD);
 
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Activate challenge slots
         market.activateSlots();

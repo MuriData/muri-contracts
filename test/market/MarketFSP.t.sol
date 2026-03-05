@@ -71,9 +71,17 @@ contract MarketFSPTest is Test {
         market = FileMarket(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
+        // Mock PoI verifier to always succeed (FSP tests don't test PoI proofs)
+        vm.mockCall(
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+        );
+
         vm.deal(user1, 100 ether);
         vm.deal(node1, 100 ether);
     }
+
+    function _emptyPoiProof() internal pure returns (uint256[8] memory proof) {}
+
 
     function test_ValidFSPProof_PlacesOrder() public {
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
@@ -132,7 +140,7 @@ contract MarketFSPTest is Test {
 
         // Execute order
         vm.prank(node1);
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
 
         // Verify node capacity updated by numChunks
         (, uint64 capacity, uint64 used,) = nodeStaking.getNodeInfo(node1);

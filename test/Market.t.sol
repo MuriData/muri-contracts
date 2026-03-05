@@ -62,6 +62,11 @@ contract MarketTest is Test {
             address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
         );
 
+        // Mock PoI verifier to always succeed so tests don't need valid proofs
+        vm.mockCall(
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+        );
+
         // Fund test accounts
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
@@ -72,6 +77,13 @@ contract MarketTest is Test {
 
     function _emptyFspProof() internal pure returns (uint256[8] memory proof) {
         // Returns zeroed proof array — works with mocked FSP verifier
+    }
+
+    function _emptyPoiProof() internal pure returns (uint256[8] memory proof) {}
+
+    function _executeOrder(address node, uint256 orderId) internal {
+        vm.prank(node);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
     }
 
     function _stakeTestNode(address node, uint256 key) internal {
@@ -101,12 +113,10 @@ contract MarketTest is Test {
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         // First node executes
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Second node executes
-        vm.prank(node2);
-        market.executeOrder(orderId);
+        _executeOrder(node2, orderId);
 
         // Check both nodes have used capacity
         (,, uint64 used1,) = nodeStaking.getNodeInfo(node1);
@@ -142,8 +152,7 @@ contract MarketTest is Test {
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
         // Node executes order
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Check initial escrow state
         (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = market.getOrderEscrowInfo(orderId);
@@ -186,7 +195,7 @@ contract MarketTest is Test {
         // This should fail
         vm.prank(node1);
         vm.expectRevert("insufficient capacity");
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
     }
 
     function test_RevertWhen_CancelOrderNotOwner() public {
@@ -217,8 +226,7 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
 
@@ -273,10 +281,8 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
-        vm.prank(node2);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
+        _executeOrder(node2, orderId);
 
         // Advance 1 period so both nodes are eligible for penalty
         vm.warp(block.timestamp + PERIOD);
@@ -326,8 +332,7 @@ contract MarketTest is Test {
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // Node front-runs cancel in same block
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Cancel in same block — node has NOT served a full period
         vm.prank(user1);
@@ -353,10 +358,8 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
-        vm.prank(node2);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
+        _executeOrder(node2, orderId);
 
         // Cancel same block — neither node has served a full period
         vm.prank(user1);
@@ -382,15 +385,13 @@ contract MarketTest is Test {
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
 
         // node1 joins early
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 period — node1 has served a full period
         vm.warp(block.timestamp + PERIOD);
 
         // node2 joins just before cancel (same block)
-        vm.prank(node2);
-        market.executeOrder(orderId);
+        _executeOrder(node2, orderId);
 
         // Cancel — node1 eligible, node2 not
         vm.prank(user1);
@@ -425,7 +426,7 @@ contract MarketTest is Test {
 
         vm.prank(node1);
         vm.expectRevert("order expired");
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
     }
 
     function test_AuthoritySlash_NoReporterReward() public {
@@ -462,8 +463,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.prank(node1);
         market.quitOrder(orderId);
@@ -555,7 +555,7 @@ contract MarketTest is Test {
         _stakeTestNode(node1, 0x1234);
         vm.prank(node1);
         vm.expectRevert("order does not exist");
-        market.executeOrder(999);
+        market.executeOrder(999, _emptyPoiProof(), bytes32(0));
     }
 
     function test_ExecuteOrder_RevertOrderFullyFilled() public {
@@ -569,12 +569,11 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, 1e12, _emptyFspProof()); // 1 replica
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.prank(node2);
         vm.expectRevert("order already filled");
-        market.executeOrder(orderId);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
     }
 
     function test_CompleteExpiredOrder_RevertNotExpired() public {
@@ -605,8 +604,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
 
@@ -651,8 +649,7 @@ contract MarketTest is Test {
 
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 1, 1, 1e12, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
 
@@ -671,8 +668,7 @@ contract MarketTest is Test {
 
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 2, 1, 1e12, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.prank(node2);
         vm.expectRevert("node not assigned to this order");
@@ -694,8 +690,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         // Confirm the uncapped slash would exceed stake
@@ -729,8 +724,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Quit should be normal (no forced exit) since capacity is large
         vm.prank(node1);
@@ -772,11 +766,10 @@ contract MarketTest is Test {
         uint256 tinyOrderId =
             market.placeOrder{value: tinyCost}(fileMeta, uint32(tinySize), periods, 1, tinyPrice, _emptyFspProof());
 
-        vm.startPrank(node1);
-        market.executeOrder(largeOrderId);
-        market.executeOrder(tinyOrderId);
+        _executeOrder(node1, largeOrderId);
+        _executeOrder(node1, tinyOrderId);
+        vm.prank(node1);
         market.quitOrder(tinyOrderId);
-        vm.stopPrank();
 
         // Quitting the tiny order must not force-exit the large order assignment.
         address[] memory largeNodes = market.getOrderNodes(largeOrderId);
@@ -866,8 +859,7 @@ contract MarketTest is Test {
 
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 1, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         vm.warp(block.timestamp + PERIOD + 1);
 
@@ -944,8 +936,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(meta, uint32(minCap), 4, 1, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // slashAmount = maxSize * price = 256 * 1e12 = 256e12
         // minStake = 256 * 1e14 = 256e14
@@ -983,12 +974,9 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(meta, uint32(maxSize), 4, 3, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
-        vm.prank(node2);
-        market.executeOrder(orderId);
-        vm.prank(node3);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
+        _executeOrder(node2, orderId);
+        _executeOrder(node3, orderId);
 
         // node1 quits (first element — swap with last, covers swap-and-pop in _removeNodeFromOrder)
         vm.prank(node1);
@@ -1013,8 +1001,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(meta, uint32(maxSize), 4, 1, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance enough to accrue some rewards but not drain full escrow
         vm.warp(block.timestamp + (PERIOD * 4) + 1);
@@ -1083,8 +1070,7 @@ contract MarketTest is Test {
             fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof()
         );
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 period so node is eligible for cancellation penalty
         vm.warp(block.timestamp + PERIOD);
@@ -1122,8 +1108,7 @@ contract MarketTest is Test {
             fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof()
         );
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Warp past expiry
         vm.warp(block.timestamp + PERIOD + 1);
@@ -1161,8 +1146,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 order1 =
             market.placeOrder{value: totalCost1 + excess1}(fileMeta, uint32(maxSize1), 2, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(order1);
+        _executeOrder(node1, order1);
 
         // Order 2: user2 overpays, 1 replica filled by node2
         uint64 maxSize2 = 128;
@@ -1171,8 +1155,7 @@ contract MarketTest is Test {
         vm.prank(user2);
         uint256 order2 =
             market.placeOrder{value: totalCost2 + excess2}(fileMeta, uint32(maxSize2), 3, 1, price, _emptyFspProof());
-        vm.prank(node2);
-        market.executeOrder(order2);
+        _executeOrder(node2, order2);
 
         // user1 withdraws excess immediately
         uint256 u1BalBefore = user1.balance;
@@ -1232,8 +1215,7 @@ contract MarketTest is Test {
 
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, 1e12, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // quitOrder should work normally with nonReentrant
         vm.prank(node1);
@@ -1260,8 +1242,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
@@ -1293,8 +1274,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
@@ -1320,8 +1300,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 2, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Slash node to force exit — should emit OrderUnderReplicated
         market.setSlashAuthority(user2, true);
@@ -1350,8 +1329,7 @@ contract MarketTest is Test {
         for (uint256 i = 0; i < 50; i++) {
             vm.prank(user1);
             uint256 oid = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
-            vm.prank(node1);
-            market.executeOrder(oid);
+            _executeOrder(node1, oid);
         }
 
         // 51st order should revert
@@ -1360,7 +1338,7 @@ contract MarketTest is Test {
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
         vm.prank(node1);
         vm.expectRevert("max orders per node reached");
-        market.executeOrder(orderId51);
+        market.executeOrder(orderId51, _emptyPoiProof(), bytes32(0));
     }
 
     function test_ChallengeableOrders_NotAddedOnPlaceOrder() public {
@@ -1395,8 +1373,7 @@ contract MarketTest is Test {
 
         assertEq(market.getChallengeableOrdersCount(), 0, "not yet challengeable");
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         assertEq(market.getChallengeableOrdersCount(), 1, "should be challengeable after first node");
         assertTrue(market.isChallengeable(orderId), "order should be marked challengeable");
@@ -1424,12 +1401,10 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, replicas, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         assertEq(market.getChallengeableOrdersCount(), 1, "one challengeable after first node");
 
-        vm.prank(node2);
-        market.executeOrder(orderId);
+        _executeOrder(node2, orderId);
         assertEq(market.getChallengeableOrdersCount(), 1, "still one challengeable after second node");
     }
 
@@ -1445,8 +1420,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         assertEq(market.getChallengeableOrdersCount(), 1, "should be challengeable");
 
@@ -1469,8 +1443,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         assertTrue(market.isChallengeable(orderId), "should be challengeable");
 
@@ -1495,8 +1468,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         assertTrue(market.isChallengeable(orderId), "should be challengeable with node assigned");
 
@@ -1531,8 +1503,7 @@ contract MarketTest is Test {
             vm.prank(user1);
             orderIds[i] =
                 market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-            vm.prank(node1);
-            market.executeOrder(orderIds[i]);
+            _executeOrder(node1, orderIds[i]);
         }
 
         assertEq(market.getChallengeableOrdersCount(), 3, "3 challengeable orders");
@@ -1564,8 +1535,7 @@ contract MarketTest is Test {
         uint256 period1Start = 1 + PERIOD;
         vm.warp(period1Start - 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // The node joined in period 0 but only 1 second before period 1.
         // With ceiling division, effective start period = ceil((period1Start-1-GENESIS_TS)/PERIOD) = 1.
@@ -1597,8 +1567,7 @@ contract MarketTest is Test {
         // Warp to exactly period 0 start (GENESIS_TS) — join at boundary
         vm.warp(1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // With ceiling division, elapsed=0, ceil(0/PERIOD)=0 → earns from period 0
         vm.warp(1 + PERIOD * 3 + 1);
@@ -1625,8 +1594,7 @@ contract MarketTest is Test {
 
         // --- First assignment: join at period 0 boundary, serve 1 full period, then quit ---
         vm.warp(1); // GENESIS_TS = 1, so this is period 0 boundary
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 full period (into period 1)
         vm.warp(1 + PERIOD);
@@ -1641,8 +1609,7 @@ contract MarketTest is Test {
 
         // --- Second assignment: re-join the same order, serve 1 full period ---
         vm.warp(1 + PERIOD); // still period 1 boundary
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 full period (into period 2)
         vm.warp(1 + PERIOD * 2);
@@ -1680,8 +1647,7 @@ contract MarketTest is Test {
         assertEq(escrowLocked, totalCost, "getGlobalStats escrow");
 
         // Execute and advance past expiry
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
         vm.warp(block.timestamp + uint256(periods) * 7 days + 1);
 
         // Complete — aggregates should drop
@@ -1725,8 +1691,7 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 period, then cancel
         vm.warp(block.timestamp + 7 days);
@@ -1755,8 +1720,7 @@ contract MarketTest is Test {
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 period and claim rewards
         vm.warp(block.timestamp + 7 days);
@@ -1785,8 +1749,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Advance 1 period and claim rewards
         vm.warp(block.timestamp + PERIOD);
@@ -1821,8 +1784,7 @@ contract MarketTest is Test {
 
         vm.prank(user1);
         uint256 oid1 = market.placeOrder{value: cost1}(fileMeta, uint32(maxSize), 1, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(oid1);
+        _executeOrder(node1, oid1);
 
         vm.prank(user1);
         market.placeOrder{value: cost2}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
@@ -1864,8 +1826,7 @@ contract MarketTest is Test {
         uint256 totalCost = uint256(maxSize) * 2 * 1e12;
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 2, 1, 1e12, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         (, uint256 cap2, uint256 used2) = ns.getNetworkStats();
         assertEq(cap2, TEST_CAPACITY, "capacity unchanged by execute");
@@ -1904,11 +1865,10 @@ contract MarketTest is Test {
     uint256 constant ZK_PROOF_7 = 0x073a1b7f939f13c0a538bcfb8e8c5c31c71e7e31d7d388423834cc1f20b93a56;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
-    // challengeSlots[5] starts at slot 31, each ChallengeSlot = 3 words (packed)
-    // slot 31: challengeSlots[0].orderId
-    // slot 32: challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes, packed)
-    // slot 33: challengeSlots[0].randomness
-    uint256 constant SLOT_CHALLENGE_SLOTS_BASE = 31;
+    // challengeSlots is now a mapping at slot 31, numChallengeSlots at slot 32
+    // slots 33-45: padding (layout preservation)
+    uint256 constant SLOT_CHALLENGE_SLOTS_MAPPING = 31;
+    uint256 constant SLOT_NUM_CHALLENGE_SLOTS = 32;
     uint256 constant SLOT_CHALLENGE_SLOTS_INITIALIZED = 46;
     uint256 constant SLOT_GLOBAL_SEED_RANDOMNESS = 47;
     uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 48;
@@ -1927,15 +1887,22 @@ contract MarketTest is Test {
 
     /// @dev Set up a challenge slot where `prover` is the challenged node for `orderId`,
     ///      with slot randomness = ZK_RANDOMNESS so the ZK proof fixture is valid.
+    ///      Uses mapping storage layout: challengeSlots[0] at keccak256(abi.encode(0, 31)).
     function _setupZKSlotChallenge(address prover, uint256 orderId) internal {
-        uint256 slotBase = SLOT_CHALLENGE_SLOTS_BASE; // slot 0 (3 words per ChallengeSlot)
+        // Compute mapping slot for challengeSlots[0]
+        bytes32 structBase = keccak256(abi.encode(uint256(0), uint256(SLOT_CHALLENGE_SLOTS_MAPPING)));
+
         // Set challengeSlots[0].orderId
-        vm.store(address(market), bytes32(slotBase), bytes32(orderId));
+        vm.store(address(market), structBase, bytes32(orderId));
         // Set challengeSlots[0].challengedNode (20 bytes) + deadlineBlock (8 bytes) packed in one word
         uint256 packed = uint256(uint160(prover)) | (uint256(block.number + CHALLENGE_WINDOW_BLOCKS) << 160);
-        vm.store(address(market), bytes32(slotBase + 1), bytes32(packed));
+        vm.store(address(market), bytes32(uint256(structBase) + 1), bytes32(packed));
         // Set challengeSlots[0].randomness = ZK_RANDOMNESS
-        vm.store(address(market), bytes32(slotBase + 2), bytes32(ZK_RANDOMNESS));
+        vm.store(address(market), bytes32(uint256(structBase) + 2), bytes32(ZK_RANDOMNESS));
+
+        // Set numChallengeSlots = 1
+        vm.store(address(market), bytes32(SLOT_NUM_CHALLENGE_SLOTS), bytes32(uint256(1)));
+
         // Mark challenge slots as initialized
         vm.store(address(market), bytes32(SLOT_CHALLENGE_SLOTS_INITIALIZED), bytes32(uint256(1)));
         // Set globalSeedRandomness to non-zero
@@ -1971,8 +1938,7 @@ contract MarketTest is Test {
     function test_SubmitProof_SlotValid() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
@@ -1995,14 +1961,16 @@ contract MarketTest is Test {
     function test_SubmitProof_RevertInvalidProof() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
         // Corrupt the proof
         uint256[8] memory badProof = _zkProof();
         badProof[0] = badProof[0] + 1;
+
+        // Clear the blanket PoI mock so the real verifier rejects the bad proof
+        vm.clearMockedCalls();
 
         vm.prank(node1);
         vm.expectRevert();
@@ -2012,13 +1980,15 @@ contract MarketTest is Test {
     function test_SubmitProof_RevertWrongCommitment() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
         uint256[8] memory proof = _zkProof();
         bytes32 wrongCommitment = bytes32(uint256(0xDEADBEEF));
+
+        // Clear the blanket PoI mock so the real verifier rejects the wrong commitment
+        vm.clearMockedCalls();
 
         vm.prank(node1);
         vm.expectRevert();
@@ -2028,8 +1998,7 @@ contract MarketTest is Test {
     function test_SubmitProof_RevertNotChallengedNode() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
@@ -2044,8 +2013,7 @@ contract MarketTest is Test {
     function test_SubmitProof_RevertAfterDeadline() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
@@ -2067,8 +2035,7 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: TEST_STAKE}(TEST_CAPACITY, 1);
 
         uint256 orderId = _placeZKOrder();
-        vm.prank(node3);
-        market.executeOrder(orderId);
+        _executeOrder(node3, orderId);
 
         _setupZKSlotChallenge(node3, orderId);
 
@@ -2095,8 +2062,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         assertFalse(market.challengeSlotsInitialized());
 
@@ -2120,8 +2086,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.activateSlots();
 
@@ -2147,8 +2112,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.activateSlots();
 
@@ -2172,10 +2136,8 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId1 = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 2, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId1);
-        vm.prank(node2);
-        market.executeOrder(orderId1);
+        _executeOrder(node1, orderId1);
+        _executeOrder(node2, orderId1);
 
         // Only challenge node1, not node2
         // Set up slot manually so only node1 is challenged
@@ -2198,8 +2160,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId =
             market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         // Warp past expiry
         vm.warp(block.timestamp + PERIOD * periods + 1);
@@ -2214,8 +2175,7 @@ contract MarketTest is Test {
     function test_ChallengedProverCannotDecreaseCapacity() public {
         _stakeZKNode(node1);
         uint256 orderId = _placeZKOrder();
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         _setupZKSlotChallenge(node1, orderId);
 
@@ -2236,8 +2196,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         uint256 orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.activateSlots();
 
@@ -2260,8 +2219,7 @@ contract MarketTest is Test {
         vm.prank(user1);
         market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
 
-        vm.prank(node1);
-        market.executeOrder(1);
+        _executeOrder(node1, 1);
 
         market.activateSlots();
 
@@ -2282,8 +2240,7 @@ contract MarketTest is Test {
         _stakeTestNode(node2, 0xABCD);
 
         // Execute the order
-        vm.prank(node1);
-        market.executeOrder(1);
+        _executeOrder(node1, 1);
 
         market.activateSlots();
 
@@ -2312,16 +2269,14 @@ contract MarketTest is Test {
             uint256 totalCost = uint256(maxSize) * 1 * price;
             vm.prank(user1);
             uint256 oid = market.placeOrder{value: totalCost}(fileMeta, uint32(maxSize), 1, 1, price, _emptyFspProof());
-            vm.prank(node1);
-            market.executeOrder(oid);
+            _executeOrder(node1, oid);
         }
 
         // Place 1 long-lived order (4 periods) so activateSlots can succeed after cleanup
         uint256 longCost = uint256(maxSize) * 4 * price;
         vm.prank(user1);
         uint256 liveOid = market.placeOrder{value: longCost}(fileMeta, uint32(maxSize), 4, 1, price, _emptyFspProof());
-        vm.prank(node1);
-        market.executeOrder(liveOid);
+        _executeOrder(node1, liveOid);
 
         // Expire the 25 short orders (but not the long one)
         vm.warp(block.timestamp + PERIOD + 1);
@@ -2362,7 +2317,8 @@ contract MaliciousMarketClaim {
         market.placeOrder{value: totalCost}(meta, uint32(maxSize), periods, 1, price, emptyProof);
 
         // Execute order as this contract
-        market.executeOrder(1);
+        uint256[8] memory poiProof;
+        market.executeOrder(1, poiProof, bytes32(0));
     }
 
     function attackClaimRewards() external {

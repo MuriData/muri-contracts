@@ -99,8 +99,10 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 public totalBurnedFromSlash;
     uint256 public totalReporterRewards;
 
-    // --- Challenge slot system (replaces old heartbeat/primary/secondary model) ---
-    uint256 public constant NUM_CHALLENGE_SLOTS = 5;
+    // --- Challenge slot system (variable slots with sqrt(N) scaling) ---
+    uint256 public constant MIN_CHALLENGE_SLOTS = 1;
+    uint256 public constant MAX_CHALLENGE_SLOTS = 50;
+    uint256 internal constant MAX_ACTIVATE_PER_CALL = 10; // bounds activation loop gas
     // Timing budget (Avalanche C-Chain, ~2s/block):
     //   50 blocks = ~100 seconds
     //   - Event detection: ~2-4s (1-2 blocks)
@@ -121,7 +123,11 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 internal constant STAKE_PER_CHUNK = 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
     uint256 public constant CANCEL_PENALTY_MAX_BPS = 2500; // 25% at order start
     uint256 public constant CANCEL_PENALTY_MIN_BPS = 500; // 5% near order end
-    ChallengeSlot[5] public challengeSlots; // NUM_CHALLENGE_SLOTS = 5
+    // Was: ChallengeSlot[5] public challengeSlots; — 15 storage words (slots 31–45)
+    // Now: mapping + counter = 2 words + 13-word padding to preserve layout
+    mapping(uint256 => ChallengeSlot) public challengeSlots; // slot 31
+    uint256 public numChallengeSlots; // slot 32
+    uint256[13] private __challengeSlotsPadding; // slots 33–45 (layout preservation)
     bool public challengeSlotsInitialized;
     uint256 public globalSeedRandomness; // rolling seed for bootstrapping slot randomness
     mapping(address => uint256) public nodeActiveChallengeCount; // O(1) prover check
@@ -154,8 +160,11 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 public totalClientCompensation; // aggregate client compensation distributed
     mapping(bytes32 => OnDemandChallenge) public onDemandChallenges; // keccak256(orderId, node) => challenge
 
-    // Reserve 196 slots for future storage variables (200 - 4 new slots)
-    uint256[196] private __gap;
+    // Persistent cursor for amortized expired-slot sweep
+    uint256 public sweepCursor;
+
+    // Reserve 195 slots for future storage variables (200 - 5 new slots)
+    uint256[195] private __gap;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
@@ -198,6 +207,7 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     event SlotExpired(uint256 indexed slotIndex, address indexed failedNode, uint256 slashAmount);
     event SlotDeactivated(uint256 indexed slotIndex);
     event SlotsActivated(uint256 activatedCount);
+    event ChallengeSlotsScaled(uint256 oldCount, uint256 newCount);
     event ExpiredSlotsProcessed(uint256 processedCount, address indexed reporter);
 
     /// @custom:oz-upgrades-unsafe-allow constructor

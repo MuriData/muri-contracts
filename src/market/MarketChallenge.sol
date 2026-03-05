@@ -13,7 +13,7 @@ abstract contract MarketChallenge is MarketAccounting {
     /// Phase 3: verify ZK proof.
     /// Phase 4: advance slot to next challenge.
     function submitProof(uint256 _slotIndex, uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
-        require(_slotIndex < NUM_CHALLENGE_SLOTS, "invalid slot index");
+        require(_slotIndex < numChallengeSlots, "invalid slot index");
 
         // Phase 1: sweep expired slots — slashes expired nodes, earns reporter rewards for caller.
         // Uses the commitment as a high-quality randomness seed for re-advancing expired slots,
@@ -57,6 +57,7 @@ abstract contract MarketChallenge is MarketAccounting {
 
     /// @notice Bootstrap or refill idle challenge slots with challengeable orders.
     /// Anyone can call. First call initializes globalSeedRandomness.
+    /// Automatically scales slot count via ceil(sqrt(N)) clamped to [MIN, MAX].
     function activateSlots() external nonReentrant {
         // Grace period: suppress challenges until challengeStartBlock
         if (challengeStartBlock > 0 && block.number < challengeStartBlock) return;
@@ -72,13 +73,56 @@ abstract contract MarketChallenge is MarketAccounting {
         // Clean up expired orders before filling slots
         _cleanupExpiredOrders();
 
+        // --- Auto-scale slot count via sqrt(N) ---
+        uint256 orderCount = challengeableOrders.length;
+        uint256 targetSlots;
+        if (orderCount == 0) {
+            targetSlots = 0;
+        } else {
+            targetSlots = _sqrt(orderCount);
+            if (targetSlots < MIN_CHALLENGE_SLOTS) targetSlots = MIN_CHALLENGE_SLOTS;
+            if (targetSlots > MAX_CHALLENGE_SLOTS) targetSlots = MAX_CHALLENGE_SLOTS;
+        }
+
+        uint256 currentCount = numChallengeSlots;
+
+        // Growth: new mapping entries default to zero (idle)
+        if (targetSlots > currentCount) {
+            emit ChallengeSlotsScaled(currentCount, targetSlots);
+            numChallengeSlots = targetSlots;
+            currentCount = targetSlots;
+        }
+
+        // Shrinkage: deactivate excess high-index slots (only idle or expired)
+        if (targetSlots < currentCount) {
+            uint256 newCount = currentCount;
+            for (uint256 i = currentCount; i > targetSlots;) {
+                i--;
+                ChallengeSlot storage slot = challengeSlots[i];
+                if (slot.orderId == 0) {
+                    newCount = i;
+                } else if (block.number > slot.deadlineBlock) {
+                    nodeActiveChallengeCount[slot.challengedNode]--;
+                    orderActiveChallengeCount[slot.orderId]--;
+                    _deactivateSlot(i);
+                    newCount = i;
+                } else {
+                    break; // active mid-flight — stop shrinking
+                }
+            }
+            if (newCount != currentCount) {
+                emit ChallengeSlotsScaled(currentCount, newCount);
+                numChallengeSlots = newCount;
+                currentCount = newCount;
+            }
+        }
+
         // Cap active slots at the number of challengeable orders to avoid
         // filling multiple slots with the same order during cold-start
-        uint256 maxSlots =
-            challengeableOrders.length < NUM_CHALLENGE_SLOTS ? challengeableOrders.length : NUM_CHALLENGE_SLOTS;
+        uint256 maxSlots = orderCount < currentCount ? orderCount : currentCount;
 
         uint256 activated = 0;
-        for (uint256 i = 0; i < maxSlots; i++) {
+        for (uint256 i = 0; i < maxSlots && activated < MAX_ACTIVATE_PER_CALL; i++) {
             if (challengeSlots[i].orderId != 0) continue; // slot already active
 
             // Derive per-slot randomness from global seed
@@ -134,7 +178,7 @@ abstract contract MarketChallenge is MarketAccounting {
     // =========================================================================
 
     /// @notice Issue an on-demand challenge for a specific (order, node) pair.
-    /// Anyone can call. Separate from the 5-slot automated system.
+    /// Anyone can call. Separate from the automated slot system.
     function challengeNode(uint256 _orderId, address _node) external nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
@@ -364,6 +408,7 @@ abstract contract MarketChallenge is MarketAccounting {
     }
 
     /// @notice Sweep expired slots: slash failed nodes, advance or deactivate.
+    /// Uses a persistent cursor to amortize work across calls.
     /// @param _reporter Address that triggered the sweep (earns reporter rewards).
     /// @param _maxSweep Maximum number of expired slots to process.
     /// @param _proofRandomness When non-zero, commitment-derived randomness from a verified proof
@@ -373,61 +418,70 @@ abstract contract MarketChallenge is MarketAccounting {
         internal
         returns (uint256 processed)
     {
+        uint256 slotCount = numChallengeSlots;
+        if (slotCount == 0) return 0;
+
         uint256 forcedExitCount = 0;
+        uint256 cursor = sweepCursor;
+        if (cursor >= slotCount) cursor = 0;
 
-        for (uint256 i = 0; i < NUM_CHALLENGE_SLOTS && processed < _maxSweep; i++) {
-            ChallengeSlot storage slot = challengeSlots[i];
+        uint256 checked = 0;
+        while (checked < slotCount && processed < _maxSweep) {
+            ChallengeSlot storage slot = challengeSlots[cursor];
 
-            // Skip idle or non-expired slots
-            if (slot.orderId == 0) continue;
-            if (block.number <= slot.deadlineBlock) continue;
+            if (slot.orderId != 0 && block.number > slot.deadlineBlock) {
+                address failedNode = slot.challengedNode;
 
-            address failedNode = slot.challengedNode;
+                // Slash the failed node — proportional to order value * multiplier, floored at MIN_PROOF_FAILURE_SLASH
+                uint256 slotOrderId_ = slot.orderId;
+                FileOrder storage order = orders[slotOrderId_];
+                uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
+                uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
 
-            // Slash the failed node — proportional to order value * multiplier, floored at MIN_PROOF_FAILURE_SLASH
-            uint256 slotOrderId_ = slot.orderId;
-            FileOrder storage order = orders[slotOrderId_];
-            uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
-            uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
-
-            if (nodeStaking.isValidNode(failedNode)) {
-                (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
-                if (slashAmount > nodeStake) {
-                    slashAmount = nodeStake;
-                }
-
-                if (slashAmount > 0) {
-                    (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(failedNode, slashAmount);
-                    _distributeSlashFunds(_reporter, failedNode, totalSlashed, slotOrderId_);
-                    if (forcedExit) {
-                        _handleForcedOrderExits(failedNode);
-                        forcedExitCount++;
+                if (nodeStaking.isValidNode(failedNode)) {
+                    (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
+                    if (slashAmount > nodeStake) {
+                        slashAmount = nodeStake;
                     }
-                    emit NodeSlashed(failedNode, slashAmount, "failed challenge proof");
+
+                    if (slashAmount > 0) {
+                        (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(failedNode, slashAmount);
+                        _distributeSlashFunds(_reporter, failedNode, totalSlashed, slotOrderId_);
+                        if (forcedExit) {
+                            _handleForcedOrderExits(failedNode);
+                            forcedExitCount++;
+                        }
+                        emit NodeSlashed(failedNode, slashAmount, "failed challenge proof");
+                    }
                 }
+
+                emit SlotExpired(cursor, failedNode, slashAmount);
+
+                // Derive randomness for re-advancing the expired slot.
+                // When triggered by submitProof, use the proof commitment (unbiasable by the prover).
+                // When triggered by processExpiredSlots (manual maintenance), fall back to chain data.
+                uint256 advanceRandomness;
+                if (_proofRandomness != 0) {
+                    advanceRandomness = uint256(keccak256(abi.encodePacked(_proofRandomness, slot.randomness, cursor)))
+                        % SNARK_SCALAR_FIELD;
+                } else {
+                    advanceRandomness = uint256(
+                        keccak256(abi.encodePacked(slot.randomness, block.number, block.prevrandao, _reporter, cursor))
+                    ) % SNARK_SCALAR_FIELD;
+                }
+
+                _advanceSlot(cursor, advanceRandomness);
+
+                processed++;
+
+                if (forcedExitCount >= MAX_FORCED_EXITS_PER_SWEEP) break;
             }
 
-            emit SlotExpired(i, failedNode, slashAmount);
-
-            // Derive randomness for re-advancing the expired slot.
-            // When triggered by submitProof, use the proof commitment (unbiasable by the prover).
-            // When triggered by processExpiredSlots (manual maintenance), fall back to chain data.
-            uint256 advanceRandomness;
-            if (_proofRandomness != 0) {
-                advanceRandomness =
-                    uint256(keccak256(abi.encodePacked(_proofRandomness, slot.randomness, i))) % SNARK_SCALAR_FIELD;
-            } else {
-                advanceRandomness = uint256(
-                    keccak256(abi.encodePacked(slot.randomness, block.number, block.prevrandao, _reporter, i))
-                ) % SNARK_SCALAR_FIELD;
-            }
-
-            _advanceSlot(i, advanceRandomness);
-
-            processed++;
-
-            if (forcedExitCount >= MAX_FORCED_EXITS_PER_SWEEP) break;
+            cursor++;
+            if (cursor >= slotCount) cursor = 0;
+            checked++;
         }
+        sweepCursor = cursor;
     }
 
     /// @notice Cleanup expired orders automatically using a persistent cursor.
@@ -463,6 +517,19 @@ abstract contract MarketChallenge is MarketAccounting {
         }
 
         cleanupCursor = (len == 0) ? 0 : i;
+    }
+
+    /// @dev Integer ceiling square root via Babylonian method
+    function _sqrt(uint256 x) internal pure returns (uint256) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) / 2;
+        uint256 y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+        // ceiling: if y*y < x, return y+1
+        return y * y < x ? y + 1 : y;
     }
 
     /// @notice Internal version of completeExpiredOrder for cleanup use

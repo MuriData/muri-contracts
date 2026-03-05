@@ -59,6 +59,11 @@ abstract contract MarketTestBase is Test {
             address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
         );
 
+        // Mock PoI verifier to always succeed so existing tests don't need valid proofs
+        vm.mockCall(
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+        );
+
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
         vm.deal(node1, 100 ether);
@@ -85,6 +90,15 @@ abstract contract MarketTestBase is Test {
         // Returns zeroed proof array — works with mocked FSP verifier
     }
 
+    function _emptyPoiProof() internal pure returns (uint256[8] memory proof) {
+        // Returns zeroed proof array — works with mocked PoI verifier
+    }
+
+    function _executeOrder(address node, uint256 orderId) internal {
+        vm.prank(node);
+        market.executeOrder(orderId, _emptyPoiProof(), bytes32(0));
+    }
+
     function _placeOrder(address owner_, uint32 numChunks, uint16 periods, uint8 replicas, uint256 price)
         internal
         returns (uint256 orderId, uint256 totalCost)
@@ -105,8 +119,7 @@ abstract contract MarketTestBase is Test {
         _stakeDefaultNode(node1, 0x1234);
         (orderId,) = _placeDefaultOrder(user1, 1);
 
-        vm.prank(node1);
-        market.executeOrder(orderId);
+        _executeOrder(node1, orderId);
 
         market.activateSlots();
 
