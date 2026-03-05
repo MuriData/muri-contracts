@@ -63,6 +63,7 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         uint64 deadlineBlock; // block.number deadline
         uint256 randomness; // randomness for proof verification
         address challenger; // who issued the challenge
+        uint256 fileRoot; // snapshot of order file root at challenge time
     }
 
     // Order management

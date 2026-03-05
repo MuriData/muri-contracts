@@ -99,7 +99,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Verify challenge is stored
         bytes32 key = keccak256(abi.encodePacked(orderId, node1));
-        (uint64 deadline, uint256 randomness, address challenger) = market.onDemandChallenges(key);
+        (uint64 deadline, uint256 randomness, address challenger,) = market.onDemandChallenges(key);
         assertGt(deadline, 0, "deadline set");
         assertGt(randomness, 0, "randomness set");
         assertEq(challenger, user2, "challenger recorded");
@@ -213,6 +213,62 @@ contract MarketEconomicsTest is MarketTestBase {
 
         vm.expectRevert("order expired");
         market.challengeNode(orderId, node1);
+    }
+
+    // ---- Regression tests: cancel-order-during-on-demand-challenge attack ----
+
+    function test_OnDemand_CancelOrder_NoSlashOnExpiry() public {
+        // Attack scenario: client places order, challenges node, cancels order,
+        // then processes expired challenge to slash the node.
+        // The fix: processExpiredOnDemandChallenge must NOT slash if the order was deleted.
+        uint64 nodeCapacity = 10000;
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        // Client issues on-demand challenge
+        vm.prank(user1);
+        market.challengeNode(orderId, node1);
+
+        // Client cancels the order
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
+
+        // Let challenge expire and process it
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        market.processExpiredOnDemandChallenge(orderId, node1);
+
+        // Node must NOT be slashed — order was cancelled, node can't be faulted
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
+        assertEq(stakeAfter, stakeBefore, "node should not be slashed after order cancellation");
+    }
+
+    function test_OnDemand_CancelOrder_NodeCanStillProve() public {
+        // Even if the order is cancelled, the node should still be able to submit
+        // proof using the file root snapshot stored in the challenge.
+        _stakeDefaultNode(node1, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        // Challenge the node
+        vm.prank(user1);
+        market.challengeNode(orderId, node1);
+
+        // Cancel the order
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        // Node submits proof (mocked verifier accepts any proof)
+        uint256[8] memory proof;
+        vm.prank(node1);
+        market.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
+
+        // Challenge should be cleared — processing should revert
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        vm.expectRevert("no active on-demand challenge");
+        market.processExpiredOnDemandChallenge(orderId, node1);
     }
 
     // =========================================================================

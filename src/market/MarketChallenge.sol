@@ -212,6 +212,7 @@ abstract contract MarketChallenge is MarketAccounting {
         challenge.deadlineBlock = deadline;
         challenge.randomness = randomness;
         challenge.challenger = msg.sender;
+        challenge.fileRoot = order.file.root;
 
         emit OnDemandChallengeIssued(_orderId, _node, msg.sender, deadline);
     }
@@ -226,14 +227,12 @@ abstract contract MarketChallenge is MarketAccounting {
         require(challenge.deadlineBlock != 0, "no active on-demand challenge");
         require(block.number <= challenge.deadlineBlock, "on-demand challenge expired");
 
-        // Verify ZK proof
-        FileOrder storage order = orders[_orderId];
-        require(order.owner != address(0), "order does not exist");
-
+        // Verify ZK proof using the file root snapshot stored at challenge time
+        // (order may have been cancelled, but the challenge remains valid)
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
 
-        uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, order.file.root];
+        uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot];
         poiVerifier.verifyProof(_proof, publicInputs);
 
         // Clear the challenge on success
@@ -254,8 +253,14 @@ abstract contract MarketChallenge is MarketAccounting {
         // Clear challenge before slashing (CEI pattern)
         delete onDemandChallenges[key];
 
-        // Apply same slash formula as slot-based challenges
+        // If the order was cancelled/deleted, the node cannot be faulted — skip slashing.
         FileOrder storage order = orders[_orderId];
+        if (order.owner == address(0)) {
+            emit OnDemandChallengeExpired(_orderId, _node, 0);
+            return;
+        }
+
+        // Apply same slash formula as slot-based challenges
         uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
         uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
 
