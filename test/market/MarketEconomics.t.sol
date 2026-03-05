@@ -271,6 +271,41 @@ contract MarketEconomicsTest is MarketTestBase {
         market.processExpiredOnDemandChallenge(orderId, node1);
     }
 
+    function test_OnDemand_CooldownHoldsAfterProofSubmission() public {
+        // After a node successfully proves, immediate re-challenge must be blocked
+        // by the cooldown (deadlineBlock preserved after resolution).
+        _stakeDefaultNode(node1, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        // Issue and resolve challenge
+        market.challengeNode(orderId, node1);
+        uint256[8] memory proof;
+        vm.prank(node1);
+        market.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
+
+        // Immediate re-challenge should fail (cooldown)
+        vm.expectRevert("on-demand challenge cooldown");
+        market.challengeNode(orderId, node1);
+    }
+
+    function test_OnDemand_CooldownHoldsAfterExpiry() public {
+        // After an expired challenge is processed, immediate re-challenge must be blocked.
+        uint64 nodeCapacity = 10000;
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        // Issue challenge, let it expire, process it
+        market.challengeNode(orderId, node1);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        market.processExpiredOnDemandChallenge(orderId, node1);
+
+        // Immediate re-challenge should fail (cooldown)
+        vm.expectRevert("on-demand challenge cooldown");
+        market.challengeNode(orderId, node1);
+    }
+
     // =========================================================================
     // Change 3: Scaled Quit Penalty
     // =========================================================================

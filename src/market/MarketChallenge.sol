@@ -224,7 +224,7 @@ abstract contract MarketChallenge is MarketAccounting {
     {
         bytes32 key = keccak256(abi.encodePacked(_orderId, msg.sender));
         OnDemandChallenge storage challenge = onDemandChallenges[key];
-        require(challenge.deadlineBlock != 0, "no active on-demand challenge");
+        require(challenge.randomness != 0, "no active on-demand challenge");
         require(block.number <= challenge.deadlineBlock, "on-demand challenge expired");
 
         // Verify ZK proof using the file root snapshot stored at challenge time
@@ -235,8 +235,10 @@ abstract contract MarketChallenge is MarketAccounting {
         uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot];
         poiVerifier.verifyProof(_proof, publicInputs);
 
-        // Clear the challenge on success
-        delete onDemandChallenges[key];
+        // Clear active fields but preserve deadlineBlock for cooldown enforcement
+        challenge.randomness = 0;
+        challenge.challenger = address(0);
+        challenge.fileRoot = 0;
 
         emit OnDemandProofSubmitted(_orderId, msg.sender, _commitment);
     }
@@ -245,13 +247,15 @@ abstract contract MarketChallenge is MarketAccounting {
     function processExpiredOnDemandChallenge(uint256 _orderId, address _node) external nonReentrant {
         bytes32 key = keccak256(abi.encodePacked(_orderId, _node));
         OnDemandChallenge storage challenge = onDemandChallenges[key];
-        require(challenge.deadlineBlock != 0, "no active on-demand challenge");
+        require(challenge.randomness != 0, "no active on-demand challenge");
         require(block.number > challenge.deadlineBlock, "on-demand challenge not expired");
 
         address challenger = challenge.challenger;
 
-        // Clear challenge before slashing (CEI pattern)
-        delete onDemandChallenges[key];
+        // Clear active fields but preserve deadlineBlock for cooldown enforcement (CEI pattern)
+        challenge.randomness = 0;
+        challenge.challenger = address(0);
+        challenge.fileRoot = 0;
 
         // If the order was cancelled/deleted, the node cannot be faulted — skip slashing.
         FileOrder storage order = orders[_orderId];
