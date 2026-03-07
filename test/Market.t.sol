@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Test, console} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../src/Market.sol";
+import {FileMarketExtension} from "../src/FileMarketExtension.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 import {MarketStorage} from "../src/market/MarketStorage.sol";
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
@@ -15,6 +16,7 @@ contract MarketTest is Test {
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
 
     FileMarket public market;
+    FileMarketExtension public marketExt;
     NodeStaking public nodeStaking;
 
     address public user1 = address(0x1111);
@@ -43,8 +45,11 @@ contract MarketTest is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
+        // Deploy FileMarketExtension (challenges + views)
+        FileMarketExtension ext = new FileMarketExtension();
+
         // Deploy FileMarket impl + proxy (initialized)
-        FileMarket marketImpl = new FileMarket();
+        FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
             (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
@@ -55,6 +60,7 @@ contract MarketTest is Test {
         NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
 
         market = FileMarket(payable(address(marketProxy)));
+        marketExt = FileMarketExtension(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
         // Mock FSP verifier to always succeed so tests don't need valid proofs
@@ -155,7 +161,7 @@ contract MarketTest is Test {
         _executeOrder(node1, orderId);
 
         // Check initial escrow state
-        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = market.getOrderEscrowInfo(orderId);
+        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = marketExt.getOrderEscrowInfo(orderId);
 
         assertEq(totalEscrow, totalCost);
         assertEq(paidToNodes, 0);
@@ -168,7 +174,7 @@ contract MarketTest is Test {
         market.claimRewards();
 
         // Check escrow after payment
-        (totalEscrow, paidToNodes, remainingEscrow) = market.getOrderEscrowInfo(orderId);
+        (totalEscrow, paidToNodes, remainingEscrow) = marketExt.getOrderEscrowInfo(orderId);
         assertEq(totalEscrow, totalCost);
         assertTrue(paidToNodes > 0);
         assertEq(remainingEscrow, totalCost - paidToNodes);
@@ -844,7 +850,8 @@ contract MarketTest is Test {
         vm.prank(user1);
         market.placeOrder{value: totalCost}(fileMeta, uint32(1024), 4, 1, 1e12, _emptyFspProof());
 
-        uint256[] memory active = market.getActiveOrders();
+        (uint256[] memory active, uint256 total) = market.getActiveOrdersPage(0, 100);
+        assertEq(total, 2);
         assertEq(active.length, 2);
         assertEq(active[0], 1);
         assertEq(active[1], 2);
@@ -864,7 +871,7 @@ contract MarketTest is Test {
         vm.warp(block.timestamp + PERIOD + 1);
 
         (uint256 totalEarned, uint256 withdrawn, uint256 claimable, uint256 lastClaim) =
-            market.getNodeEarningsInfo(node1);
+            marketExt.getNodeEarningsInfo(node1);
         assertEq(totalEarned, 0, "not settled yet");
         assertEq(withdrawn, 0);
         assertTrue(claimable > 0, "has claimable");
@@ -872,7 +879,7 @@ contract MarketTest is Test {
     }
 
     function test_GetNodeOrderEarnings() public view {
-        assertEq(market.getNodeOrderEarnings(node1, 1), 0);
+        assertEq(marketExt.getNodeOrderEarnings(node1, 1), 0);
     }
 
     function test_GetRecentOrders_CountExceedsTotal() public {
@@ -882,12 +889,12 @@ contract MarketTest is Test {
         vm.prank(user1);
         market.placeOrder{value: totalCost}(fileMeta, uint32(256), 2, 1, 1e12, _emptyFspProof());
 
-        (uint256[] memory ids,,,,,,,) = market.getRecentOrders(100);
+        (uint256[] memory ids,,,,,,,) = marketExt.getRecentOrders(100);
         assertEq(ids.length, 1); // capped to actual count
     }
 
     function test_GetFinancialStats_NoOrders() public view {
-        (,,, uint256 avgOrderVal,) = market.getFinancialStats();
+        (,,, uint256 avgOrderVal,) = marketExt.getFinancialStats();
         assertEq(avgOrderVal, 0, "no orders - avg = 0");
     }
 
@@ -953,10 +960,10 @@ contract MarketTest is Test {
 
     function test_GetOrderFinancials_RevertInvalidId() public {
         vm.expectRevert("invalid order id");
-        market.getOrderFinancials(0);
+        marketExt.getOrderFinancials(0);
 
         vm.expectRevert("invalid order id");
-        market.getOrderFinancials(999);
+        marketExt.getOrderFinancials(999);
     }
 
     function test_QuitOrder_MiddleNode_SwapAndPop() public {
@@ -985,7 +992,7 @@ contract MarketTest is Test {
         // node1 should no longer be assigned
         assertFalse(nodeStaking.isValidNode(node1) && false, "just verifying quit worked");
         // Order should have 2 filled now
-        (,,,,,, uint16 filled) = market.getOrderDetails(orderId);
+        (,,,,,, uint16 filled) = marketExt.getOrderDetails(orderId);
         assertEq(filled, 2, "should have 2 nodes after quit");
     }
 
@@ -1032,7 +1039,7 @@ contract MarketTest is Test {
         uint256 orderId = market.placeOrder{value: sent}(fileMeta, uint32(maxSize), periods, 1, price, _emptyFspProof());
 
         // Escrow should store only totalCost, not msg.value
-        (uint256 storedEscrow,,) = market.getOrderEscrowInfo(orderId);
+        (uint256 storedEscrow,,) = marketExt.getOrderEscrowInfo(orderId);
         assertEq(storedEscrow, totalCost, "escrow stores totalCost not msg.value");
 
         // Excess already queued
@@ -1196,7 +1203,7 @@ contract MarketTest is Test {
         );
 
         // Verify escrow stores totalCost, not msg.value
-        (uint256 storedEscrow, uint256 paidToNodes, uint256 remaining) = market.getOrderEscrowInfo(orderId);
+        (uint256 storedEscrow, uint256 paidToNodes, uint256 remaining) = marketExt.getOrderEscrowInfo(orderId);
         assertEq(storedEscrow, totalCost, "escrow == totalCost");
         assertEq(paidToNodes, 0, "no payments yet");
         assertEq(remaining, totalCost, "remaining == totalCost");
@@ -1643,7 +1650,7 @@ contract MarketTest is Test {
         assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn after place");
 
         // Check getGlobalStats returns same value
-        (,, uint256 escrowLocked,,,,,,,,) = market.getGlobalStats();
+        (,, uint256 escrowLocked,,,,,,,) = marketExt.getGlobalStats();
         assertEq(escrowLocked, totalCost, "getGlobalStats escrow");
 
         // Execute and advance past expiry
@@ -1673,7 +1680,7 @@ contract MarketTest is Test {
         assertEq(market.aggregateActiveEscrow(), cost1 * 2, "two orders escrow");
 
         // Financial stats should match
-        (, uint256 escrowHeld, uint256 rewardsPaid, uint256 avgVal,) = market.getFinancialStats();
+        (, uint256 escrowHeld, uint256 rewardsPaid, uint256 avgVal,) = marketExt.getFinancialStats();
         assertEq(escrowHeld, cost1 * 2, "financial escrow held");
         assertEq(rewardsPaid, 0, "no rewards paid");
         assertEq(avgVal, cost1, "average = total / 2");
@@ -1704,7 +1711,7 @@ contract MarketTest is Test {
         assertEq(market.aggregateActiveWithdrawn(), 0, "withdrawn zero after cancel");
 
         // Global stats should reflect zero
-        (,, uint256 escrowLocked,,,,,,,,) = market.getGlobalStats();
+        (,, uint256 escrowLocked,,,,,,,) = marketExt.getGlobalStats();
         assertEq(escrowLocked, 0, "global stats escrow zero");
     }
 
@@ -1732,7 +1739,7 @@ contract MarketTest is Test {
         assertEq(market.aggregateActiveEscrow(), totalCost, "escrow unchanged after claim");
 
         // Financial stats should show the split
-        (, uint256 escrowHeld, uint256 rewardsPaid,,) = market.getFinancialStats();
+        (, uint256 escrowHeld, uint256 rewardsPaid,,) = marketExt.getFinancialStats();
         assertEq(rewardsPaid, expectedReward, "rewards paid = withdrawn");
         assertEq(escrowHeld, totalCost - expectedReward, "escrow held = total - rewards");
     }
@@ -1757,7 +1764,7 @@ contract MarketTest is Test {
         market.claimRewards();
 
         // Snapshot stats before completing the order
-        (,, uint256 rewardsBefore, uint256 avgBefore,) = market.getFinancialStats();
+        (,, uint256 rewardsBefore, uint256 avgBefore,) = marketExt.getFinancialStats();
         assertGt(rewardsBefore, 0, "rewards accrued before completion");
         assertGt(avgBefore, 0, "average nonzero before completion");
 
@@ -1766,7 +1773,7 @@ contract MarketTest is Test {
         market.completeExpiredOrder(orderId);
 
         // Lifetime counters must not decrease
-        (, uint256 escrowHeldAfter, uint256 rewardsAfter, uint256 avgAfter,) = market.getFinancialStats();
+        (, uint256 escrowHeldAfter, uint256 rewardsAfter, uint256 avgAfter,) = marketExt.getFinancialStats();
         assertGe(rewardsAfter, rewardsBefore, "totalRewardsPaid must not decrease after completion");
         assertGe(avgAfter, avgBefore, "averageOrderValue must not decrease after completion");
         // Active escrow held can decrease — that's expected
@@ -1800,7 +1807,7 @@ contract MarketTest is Test {
         assertEq(market.lifetimeEscrowDeposited(), cost1 + cost2, "lifetime escrow preserved after completion");
 
         // averageOrderValue = (cost1 + cost2) / 2
-        (,,, uint256 avgVal,) = market.getFinancialStats();
+        (,,, uint256 avgVal,) = marketExt.getFinancialStats();
         assertEq(avgVal, (cost1 + cost2) / 2, "average reflects lifetime escrow");
     }
 
@@ -1944,13 +1951,13 @@ contract MarketTest is Test {
 
         uint256[8] memory proof = _zkProof();
         vm.prank(node1);
-        market.submitProof(0, proof, ZK_COMMITMENT);
+        marketExt.submitProof(0, proof, ZK_COMMITMENT);
 
         // After successful proof, _advanceSlot is called. Since node1 is the only node
         // on the only challengeable order, it may be re-challenged. The key check is that
         // the proof submission succeeded without reverting.
         // Just verify the slot is in a valid state (either re-challenged or deactivated)
-        (uint256 slotOrderId,,, uint256 deadlineBlock,) = market.getSlotInfo(0);
+        (uint256 slotOrderId,,, uint256 deadlineBlock,) = marketExt.getSlotInfo(0);
         if (slotOrderId != 0) {
             // Slot re-advanced (node1 re-challenged since it's the only node)
             assertGt(deadlineBlock, 0, "re-advanced slot has valid deadline");
@@ -1974,7 +1981,7 @@ contract MarketTest is Test {
 
         vm.prank(node1);
         vm.expectRevert();
-        market.submitProof(0, badProof, ZK_COMMITMENT);
+        marketExt.submitProof(0, badProof, ZK_COMMITMENT);
     }
 
     function test_SubmitProof_RevertWrongCommitment() public {
@@ -1992,7 +1999,7 @@ contract MarketTest is Test {
 
         vm.prank(node1);
         vm.expectRevert();
-        market.submitProof(0, proof, wrongCommitment);
+        marketExt.submitProof(0, proof, wrongCommitment);
     }
 
     function test_SubmitProof_RevertNotChallengedNode() public {
@@ -2007,7 +2014,7 @@ contract MarketTest is Test {
         // node2 tries to submit for node1's slot
         vm.prank(node2);
         vm.expectRevert("not the challenged node");
-        market.submitProof(0, proof, ZK_COMMITMENT);
+        marketExt.submitProof(0, proof, ZK_COMMITMENT);
     }
 
     function test_SubmitProof_RevertAfterDeadline() public {
@@ -2026,7 +2033,7 @@ contract MarketTest is Test {
         // "slot is idle" if deactivated, or "not the challenged node" if re-advanced to someone else.
         vm.prank(node1);
         vm.expectRevert();
-        market.submitProof(0, proof, ZK_COMMITMENT);
+        marketExt.submitProof(0, proof, ZK_COMMITMENT);
     }
 
     function test_SubmitProof_RevertNodePubKeyNotSet() public {
@@ -2047,7 +2054,7 @@ contract MarketTest is Test {
         uint256[8] memory proof = _zkProof();
         vm.prank(node3);
         vm.expectRevert("node public key not set");
-        market.submitProof(0, proof, ZK_COMMITMENT);
+        marketExt.submitProof(0, proof, ZK_COMMITMENT);
     }
 
     // =========================================================================
@@ -2066,13 +2073,13 @@ contract MarketTest is Test {
 
         assertFalse(market.challengeSlotsInitialized());
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         assertTrue(market.challengeSlotsInitialized());
         assertGt(market.globalSeedRandomness(), 0);
 
         // At least one slot should be active
-        (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(0);
+        (uint256 slotOrderId, address slotNode,,,) = marketExt.getSlotInfo(0);
         assertGt(slotOrderId, 0);
         assertTrue(slotNode != address(0));
     }
@@ -2088,7 +2095,7 @@ contract MarketTest is Test {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
@@ -2097,7 +2104,7 @@ contract MarketTest is Test {
 
         // node2 processes expired slots as reporter
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         assertTrue(stakeAfter < stakeBefore, "node1 should be slashed");
@@ -2114,7 +2121,7 @@ contract MarketTest is Test {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // node1 is under active challenge, should not be able to quit
         vm.prank(node1);
@@ -2198,13 +2205,13 @@ contract MarketTest is Test {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Move past deadline
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         assertEq(market.reporterPendingRewards(node2), 0, "no reporter reward at 0 bps");
     }
@@ -2221,7 +2228,7 @@ contract MarketTest is Test {
 
         _executeOrder(node1, 1);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         uint256 r = market.globalSeedRandomness();
         assertTrue(r < SNARK_SCALAR_FIELD, "randomness must be < SNARK_SCALAR_FIELD after activateSlots");
@@ -2242,14 +2249,14 @@ contract MarketTest is Test {
         // Execute the order
         _executeOrder(node1, 1);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Move past deadline
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         // processExpiredSlots should work even with a reverting receiver in the system
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
     }
 
     function test_CleanupExpiredOrders_BoundedGas() public {
@@ -2283,7 +2290,7 @@ contract MarketTest is Test {
 
         // activateSlots calls _cleanupExpiredOrders which should be bounded
         // It should not revert with out-of-gas
-        market.activateSlots();
+        marketExt.activateSlots();
     }
 }
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {MarketAccounting} from "./MarketAccounting.sol";
+import {MarketHelpers} from "./MarketHelpers.sol";
 
 /// @notice Event-driven parallel challenge slots for Avalanche C-Chain.
 /// N independent challenge slots run in parallel. Each slot challenges one node
 /// to prove one order. Expired slots are slashed as a side effect of any submitProof call.
-abstract contract MarketChallenge is MarketAccounting {
+abstract contract MarketChallenge is MarketHelpers {
     /// @notice Submit proof for a specific challenge slot — the ONLY function nodes call.
     /// Phase 1: sweep expired slots (slash lazy nodes), using commitment-derived randomness.
     /// Phase 2: validate caller is the challenged node for this slot.

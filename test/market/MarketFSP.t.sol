@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../../src/Market.sol";
+import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {MarketStorage} from "../../src/market/MarketStorage.sol";
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
@@ -51,8 +52,9 @@ contract MarketFSPTest is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
-        // Deploy FileMarket impl + proxy (initialized)
-        FileMarket marketImpl = new FileMarket();
+        // Deploy FileMarketExtension + FileMarket impl + proxy (initialized)
+        FileMarketExtension ext = new FileMarketExtension();
+        FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
             (

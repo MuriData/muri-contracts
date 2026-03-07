@@ -13,7 +13,7 @@ abstract contract MarketViews is MarketChallenge {
     {
         totalEarned = nodeEarnings[_node];
         withdrawn = nodeWithdrawn[_node];
-        claimable = this.getClaimableRewards(_node);
+        claimable = _getClaimableRewards(_node);
         lastClaimPeriod = nodeLastClaimPeriod[_node];
     }
 
@@ -97,7 +97,6 @@ abstract contract MarketViews is MarketChallenge {
             uint256 totalNodes,
             uint256 totalCapacityStaked,
             uint256 totalCapacityUsed,
-            uint256 currentRandomnessValue,
             uint256 activeChallengeSlots,
             uint256 currentPeriod_,
             uint256 currentBlock_,
@@ -111,8 +110,6 @@ abstract contract MarketViews is MarketChallenge {
         totalEscrowLocked = aggregateActiveEscrow - aggregateActiveWithdrawn;
 
         (totalNodes, totalCapacityStaked, totalCapacityUsed) = nodeStaking.getNetworkStats();
-
-        currentRandomnessValue = globalSeedRandomness;
 
         // Count active slots
         for (uint256 i = 0; i < numChallengeSlots; i++) {

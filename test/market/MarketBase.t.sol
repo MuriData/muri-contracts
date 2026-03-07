@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../../src/Market.sol";
+import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {MarketStorage} from "../../src/market/MarketStorage.sol";
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
@@ -14,6 +15,7 @@ abstract contract MarketTestBase is Test {
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
 
     FileMarket internal market;
+    FileMarketExtension internal marketExt;
     NodeStaking internal nodeStaking;
 
     address internal user1 = address(0x1111);
@@ -40,8 +42,11 @@ abstract contract MarketTestBase is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
+        // Deploy FileMarketExtension
+        FileMarketExtension ext = new FileMarketExtension();
+
         // Deploy FileMarket impl + proxy (initialized)
-        FileMarket marketImpl = new FileMarket();
+        FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
             (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
@@ -52,6 +57,7 @@ abstract contract MarketTestBase is Test {
         NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
 
         market = FileMarket(payable(address(marketProxy)));
+        marketExt = FileMarketExtension(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
         // Mock FSP verifier to always succeed so existing tests don't need valid proofs
@@ -121,10 +127,10 @@ abstract contract MarketTestBase is Test {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Read slot 0 to get the challenged node
-        (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(0);
+        (uint256 slotOrderId, address slotNode,,,) = marketExt.getSlotInfo(0);
         require(slotOrderId != 0, "slot not activated");
         challengedNode = slotNode;
     }

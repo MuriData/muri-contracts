@@ -20,7 +20,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.deal(KL_REPORTER, 1 ether);
 
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
 
         // Node should be removed (full-stake slash)
         assertFalse(nodeStaking.isValidNode(node1));
@@ -34,7 +34,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         assertGt(stakeBefore, 0);
 
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
 
         // Node should be removed (no longer valid)
         assertFalse(nodeStaking.isValidNode(node1));
@@ -45,7 +45,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.deal(KL_REPORTER, 1 ether);
 
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
 
         uint256 reward = market.reporterPendingRewards(KL_REPORTER);
         assertGt(reward, 0, "reporter should have pending reward");
@@ -60,7 +60,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
 
         // Node should be fully removed — no active orders
         assertFalse(nodeStaking.isValidNode(node1));
@@ -71,11 +71,11 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.deal(KL_REPORTER, 1 ether);
 
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
 
         vm.expectRevert("not a valid node");
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
     }
 
     function test_ReportKeyLeak_RevertInvalidProof() public {
@@ -89,7 +89,7 @@ contract MarketKeyLeakTest is MarketTestBase {
 
         vm.prank(KL_REPORTER);
         vm.expectRevert();
-        market.reportKeyLeak(node1, badProof);
+        marketExt.reportKeyLeak(node1, badProof);
     }
 
     function test_ReportKeyLeak_RevertNotANode() public {
@@ -97,7 +97,7 @@ contract MarketKeyLeakTest is MarketTestBase {
 
         vm.expectRevert("not a valid node");
         vm.prank(KL_REPORTER);
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
     }
 
     function test_ReportKeyLeak_RevertWrongReporter() public {
@@ -106,6 +106,6 @@ contract MarketKeyLeakTest is MarketTestBase {
         // Call from user1 instead of KL_REPORTER — proof was generated for 0xDEAD
         vm.prank(user1);
         vm.expectRevert();
-        market.reportKeyLeak(node1, KL_PROOF);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
     }
 }

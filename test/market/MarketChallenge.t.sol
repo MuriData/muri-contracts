@@ -13,20 +13,20 @@ contract MarketChallengeTest is MarketTestBase {
         assertFalse(market.challengeSlotsInitialized());
         assertEq(market.globalSeedRandomness(), 0);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         assertTrue(market.challengeSlotsInitialized());
         assertGt(market.globalSeedRandomness(), 0);
 
         // At least one slot should be active
-        (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(0);
+        (uint256 slotOrderId, address slotNode,,,) = marketExt.getSlotInfo(0);
         assertGt(slotOrderId, 0);
         assertTrue(slotNode != address(0));
     }
 
     function test_ActivateSlots_NoOpWhenNoChallengeableOrders() public {
         // Should not revert — cleanup side effects still commit
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // No slots should exist (numChallengeSlots == 0)
         assertEq(market.numChallengeSlots(), 0);
@@ -37,12 +37,12 @@ contract MarketChallengeTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         uint256[8] memory proof;
         vm.prank(node1);
         vm.expectRevert("invalid slot index");
-        market.submitProof(100, proof, bytes32(uint256(1)));
+        marketExt.submitProof(100, proof, bytes32(uint256(1)));
     }
 
     function test_SubmitProof_RevertsOnIdleSlot() public {
@@ -53,20 +53,20 @@ contract MarketChallengeTest is MarketTestBase {
         _stakeDefaultNode(node1, 0x1234);
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Expire the slot
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
         // Expire the order too so re-advance deactivates
         vm.warp(block.timestamp + 4 * 7 days + 1);
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // Now slot 0 should be idle but numChallengeSlots >= 1
         uint256[8] memory proof;
         vm.prank(node1);
         vm.expectRevert("slot is idle");
-        market.submitProof(0, proof, bytes32(uint256(1)));
+        marketExt.submitProof(0, proof, bytes32(uint256(1)));
     }
 
     function test_SubmitProof_RevertsWhenNotChallengedNode() public {
@@ -76,13 +76,13 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // node2 tries to submit proof for node1's challenge
         uint256[8] memory proof;
         vm.prank(node2);
         vm.expectRevert("not the challenged node");
-        market.submitProof(0, proof, bytes32(uint256(1)));
+        marketExt.submitProof(0, proof, bytes32(uint256(1)));
     }
 
     function test_SubmitProof_RevertsAfterDeadline() public {
@@ -97,7 +97,7 @@ contract MarketChallengeTest is MarketTestBase {
         uint256[8] memory proof;
         vm.prank(challengedNode);
         vm.expectRevert();
-        market.submitProof(0, proof, bytes32(uint256(1)));
+        marketExt.submitProof(0, proof, bytes32(uint256(1)));
     }
 
     function test_ProcessExpiredSlots_SlashesAndRewardsReporter() public {
@@ -107,7 +107,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Verify node1 has an active challenge
         assertTrue(market.nodeActiveChallengeCount(node1) > 0);
@@ -117,7 +117,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         // node2 processes expired slots as reporter
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // Reporter should earn reward
         assertGt(market.reporterPendingRewards(node2), 0);
@@ -125,7 +125,7 @@ contract MarketChallengeTest is MarketTestBase {
 
     function test_ProcessExpiredSlots_RevertsWhenNoneExpired() public {
         vm.expectRevert("no expired slots");
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
     }
 
     function test_CancelOrder_RevertsWhenUnderActiveChallenge() public {
@@ -142,7 +142,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         vm.prank(node1);
         vm.expectRevert("active prover cannot quit");
@@ -156,7 +156,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Verify the order is under active challenge
         assertGt(market.orderActiveChallengeCount(orderId), 0);
@@ -169,11 +169,11 @@ contract MarketChallengeTest is MarketTestBase {
         // Before the fix, cleanup would delete the order even though a slot points to it.
 
         // The order should still exist because it's under active challenge
-        (address owner_,,,,,,) = market.getOrderDetails(orderId);
+        (address owner_,,,,,,) = marketExt.getOrderDetails(orderId);
         assertEq(owner_, user1, "order should survive cleanup while under active challenge");
 
         // The order's data should still be readable (not zeroed out)
-        (,, uint256 root_,,,,) = market.getOrderDetails(orderId);
+        (,, uint256 root_,,,,) = marketExt.getOrderDetails(orderId);
         assertGt(root_, 0, "order file root should not be zeroed");
     }
 
@@ -198,14 +198,14 @@ contract MarketChallengeTest is MarketTestBase {
         assertEq(market.getNodeOrders(node3).length, 1);
 
         // Fill challenge slots across the 3 order/node pairs
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Expire all challenge deadlines
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         // Sweep: slashes expired nodes, triggers forced exits, earns reporter rewards
         vm.prank(user1);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // Invariant: every node that was slashed with forcedExit==true must have
         // been fully detached from orders. A stale assignment here means
@@ -247,7 +247,7 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node2, order4);
 
         // Activate: ceil(sqrt(4)) = 2 slots
-        market.activateSlots();
+        marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 2, "should have 2 challenge slots");
 
         // Collect which nodes were assigned across the 2 active slots
@@ -255,7 +255,7 @@ contract MarketChallengeTest is MarketTestBase {
         bool hasNode2;
 
         for (uint256 i = 0; i < 2; i++) {
-            (uint256 slotOrderId, address slotNode,,,) = market.getSlotInfo(i);
+            (uint256 slotOrderId, address slotNode,,,) = marketExt.getSlotInfo(i);
             assertGt(slotOrderId, 0, "slot should be active");
 
             if (slotNode == node1) hasNode1 = true;
@@ -286,7 +286,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
@@ -294,7 +294,7 @@ contract MarketChallengeTest is MarketTestBase {
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
@@ -313,14 +313,14 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
@@ -342,12 +342,12 @@ contract MarketChallengeTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // Node should be fully removed (capacity == 0)
         assertFalse(nodeStaking.isValidNode(node1), "node should be removed after full slash");
@@ -364,7 +364,7 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node1, order1);
         _executeOrder(node2, order2);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Move past deadline for all slots
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
@@ -372,7 +372,7 @@ contract MarketChallengeTest is MarketTestBase {
         // When any node submits a proof (even if it reverts), sweeping still processes
         // Use processExpiredSlots as the trigger
         vm.prank(user1);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // Slots should have been processed (slashed and re-advanced or deactivated)
         // Check that reporter rewards were generated
@@ -404,7 +404,7 @@ contract MarketChallengeTest is MarketTestBase {
             _executeOrder(node3, oid);
         }
 
-        market.activateSlots();
+        marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 3, "9 orders should yield 3 slots");
     }
 
@@ -418,7 +418,7 @@ contract MarketChallengeTest is MarketTestBase {
             _executeOrder(node1, oid);
         }
 
-        market.activateSlots();
+        marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 2, "4 orders should yield 2 slots");
 
         // Expire challenges and orders
@@ -427,10 +427,10 @@ contract MarketChallengeTest is MarketTestBase {
 
         // Process expired slots first
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         // activateSlots should scale down (cleanup removes expired orders from challengeableOrders)
-        market.activateSlots();
+        marketExt.activateSlots();
         assertLe(market.numChallengeSlots(), 2, "slots should not grow after orders expire");
     }
 
@@ -454,7 +454,7 @@ contract MarketChallengeTest is MarketTestBase {
             }
         }
 
-        market.activateSlots();
+        marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 50, "slots should be capped at MAX_CHALLENGE_SLOTS");
     }
 
@@ -472,7 +472,7 @@ contract MarketChallengeTest is MarketTestBase {
             }
         }
 
-        market.activateSlots();
+        marketExt.activateSlots();
         uint256 slotCount = market.numChallengeSlots();
         assertGt(slotCount, 0, "should have slots");
 
@@ -483,7 +483,7 @@ contract MarketChallengeTest is MarketTestBase {
 
         // Process expired slots — should advance cursor
         vm.prank(user1);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         uint256 cursorAfter = market.sweepCursor();
 
@@ -508,7 +508,7 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node2, order3);
         _executeOrder(node2, order4);
 
-        market.activateSlots();
+        marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 2, "4 orders should yield 2 slots");
 
         // Expire orders 1 and 2 (1-period orders)
@@ -517,7 +517,7 @@ contract MarketChallengeTest is MarketTestBase {
         // Don't expire the challenge deadlines — slots are still mid-flight
         // Now call activateSlots → tries to shrink to ceil(sqrt(2)) = 2
         // Since we still have 2 challengeable long-lived orders, target stays at 2
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Slots should not have decreased below what's active mid-flight
         assertGe(market.numChallengeSlots(), 1, "should not shrink below active mid-flight slots");

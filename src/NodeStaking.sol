@@ -396,6 +396,29 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
         }
     }
 
+    /// @notice Get a paginated slice of the node list
+    /// @param offset Starting index in the nodeList array
+    /// @param limit Maximum number of addresses to return
+    /// @return addresses The node addresses for this page
+    /// @return total The total number of registered nodes
+    function getNodeListPage(uint256 offset, uint256 limit)
+        external
+        view
+        returns (address[] memory addresses, uint256 total)
+    {
+        total = nodeList.length;
+        if (offset >= total) {
+            return (new address[](0), total);
+        }
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+        uint256 count = end - offset;
+        addresses = new address[](count);
+        for (uint256 i = 0; i < count; i++) {
+            addresses[i] = nodeList[offset + i];
+        }
+    }
+
     /// @notice Get network-wide statistics for monitoring (O(1) via incremental aggregates)
     function getNetworkStats()
         external

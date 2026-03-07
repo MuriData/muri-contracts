@@ -27,13 +27,13 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId,) = _placeOrder(user1, size, 4, 1, price);
 
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
@@ -49,13 +49,13 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
@@ -95,7 +95,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Anyone can issue an on-demand challenge
         vm.prank(user2);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         // Verify challenge is stored
         bytes32 key = keccak256(abi.encodePacked(orderId, node1));
@@ -107,7 +107,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
     function test_OnDemand_RevertOrderDoesNotExist() public {
         vm.expectRevert("order does not exist");
-        market.challengeNode(999, node1);
+        marketExt.challengeNode(999, node1);
     }
 
     function test_OnDemand_RevertNodeNotAssigned() public {
@@ -115,7 +115,7 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         vm.expectRevert("node not assigned to this order");
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     function test_OnDemand_RevertCooldown() public {
@@ -125,11 +125,11 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         // First challenge
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         // Immediate re-challenge should fail (cooldown)
         vm.expectRevert("on-demand challenge cooldown");
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     function test_OnDemand_CooldownExpiresAfterWindow() public {
@@ -141,15 +141,15 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         // First challenge
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         // Process the expired challenge so it's cleared (node gets slashed but survives)
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
 
         // After cooldown (deadline + 2 * CHALLENGE_WINDOW_BLOCKS), should work
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 2 + 1);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     function test_OnDemand_ProcessExpiredSlashesNode() public {
@@ -160,7 +160,7 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         vm.prank(user2);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
 
@@ -169,7 +169,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Anyone can process expired on-demand challenge
         vm.prank(user2);
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         assertTrue(stakeAfter < stakeBefore, "node was slashed");
@@ -182,12 +182,12 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256[8] memory proof;
         vm.prank(node1);
         vm.expectRevert("no active on-demand challenge");
-        market.submitOnDemandProof(1, proof, bytes32(uint256(1)));
+        marketExt.submitOnDemandProof(1, proof, bytes32(uint256(1)));
     }
 
     function test_OnDemand_ProcessExpiredReverts_WhenNoChallenge() public {
         vm.expectRevert("no active on-demand challenge");
-        market.processExpiredOnDemandChallenge(1, node1);
+        marketExt.processExpiredOnDemandChallenge(1, node1);
     }
 
     function test_OnDemand_ProcessExpiredReverts_WhenNotExpired() public {
@@ -196,10 +196,10 @@ contract MarketEconomicsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         vm.expectRevert("on-demand challenge not expired");
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
     }
 
     function test_OnDemand_RevertExpiredOrder() public {
@@ -212,7 +212,7 @@ contract MarketEconomicsTest is MarketTestBase {
         vm.warp(block.timestamp + PERIOD + 1);
 
         vm.expectRevert("order expired");
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     // ---- Regression tests: cancel-order-during-on-demand-challenge attack ----
@@ -228,7 +228,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Client issues on-demand challenge
         vm.prank(user1);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         // Client cancels the order
         vm.prank(user1);
@@ -238,7 +238,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Let challenge expire and process it
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
 
         // Node must NOT be slashed — order was cancelled, node can't be faulted
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
@@ -254,7 +254,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Challenge the node
         vm.prank(user1);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         // Cancel the order
         vm.prank(user1);
@@ -263,12 +263,12 @@ contract MarketEconomicsTest is MarketTestBase {
         // Node submits proof (mocked verifier accepts any proof)
         uint256[8] memory proof;
         vm.prank(node1);
-        market.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
+        marketExt.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
 
         // Challenge should be cleared — processing should revert
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
         vm.expectRevert("no active on-demand challenge");
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
     }
 
     function test_OnDemand_CooldownHoldsAfterProofSubmission() public {
@@ -279,14 +279,14 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         // Issue and resolve challenge
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
         uint256[8] memory proof;
         vm.prank(node1);
-        market.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
+        marketExt.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
 
         // Immediate re-challenge should fail (cooldown)
         vm.expectRevert("on-demand challenge cooldown");
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     function test_OnDemand_CooldownHoldsAfterExpiry() public {
@@ -297,13 +297,13 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         // Issue challenge, let it expire, process it
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
 
         // Immediate re-challenge should fail (cooldown)
         vm.expectRevert("on-demand challenge cooldown");
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
     }
 
     // =========================================================================
@@ -534,14 +534,14 @@ contract MarketEconomicsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         uint256 clientRefundBefore = market.pendingRefunds(user1);
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         uint256 clientRefundAfter = market.pendingRefunds(user1);
         assertTrue(clientRefundAfter > clientRefundBefore, "client received compensation");
@@ -595,13 +595,13 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         uint256 clientRefundBefore = market.pendingRefunds(user1);
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         assertEq(market.pendingRefunds(user1), clientRefundBefore, "no comp when bps=0");
     }
@@ -613,12 +613,12 @@ contract MarketEconomicsTest is MarketTestBase {
         (uint256 orderId,) = _placeDefaultOrder(user1, 1);
 
         _executeOrder(node1, orderId);
-        market.activateSlots();
+        marketExt.activateSlots();
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,, uint256 totalClientComp) =
             market.getSlashRedistributionStats();
@@ -728,12 +728,12 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 clientRefundBefore = market.pendingRefunds(user1);
 
         vm.prank(user2);
-        market.challengeNode(orderId, node1);
+        marketExt.challengeNode(orderId, node1);
 
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         vm.prank(user2);
-        market.processExpiredOnDemandChallenge(orderId, node1);
+        marketExt.processExpiredOnDemandChallenge(orderId, node1);
 
         uint256 clientRefundAfter = market.pendingRefunds(user1);
         assertTrue(clientRefundAfter > clientRefundBefore, "client gets comp from on-demand challenge failure");

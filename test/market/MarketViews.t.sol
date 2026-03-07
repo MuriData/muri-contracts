@@ -15,12 +15,11 @@ contract MarketViewsTest is MarketTestBase {
             uint256 totalNodes,
             uint256 totalCapacityStaked,
             uint256 totalCapacityUsed,
-            uint256 currentRandomnessValue,
             uint256 activeChallengeSlots,
             uint256 currentPeriod_,
             uint256 currentBlock_,
             uint256 challengeableOrdersCount
-        ) = market.getGlobalStats();
+        ) = marketExt.getGlobalStats();
 
         assertEq(totalOrders, 1);
         assertEq(activeOrdersCount, 1);
@@ -32,7 +31,6 @@ contract MarketViewsTest is MarketTestBase {
         assertEq(activeChallengeSlots, 0);
         assertEq(currentPeriod_, market.currentPeriod());
         assertEq(currentBlock_, block.number);
-        assertEq(currentRandomnessValue, 0);
     }
 
     function test_GetRecentOrders_Empty() public view {
@@ -45,7 +43,7 @@ contract MarketViewsTest is MarketTestBase {
             uint8[] memory filled,
             uint256[] memory escrows,
             bool[] memory isActive
-        ) = market.getRecentOrders(5);
+        ) = marketExt.getRecentOrders(5);
 
         assertEq(ids.length, 0);
         assertEq(owners.length, 0);
@@ -62,7 +60,7 @@ contract MarketViewsTest is MarketTestBase {
         _placeDefaultOrder(user1, 1);
         _placeDefaultOrder(user1, 1);
 
-        (uint256[] memory ids,,,,,,,) = market.getRecentOrders(2);
+        (uint256[] memory ids,,,,,,,) = marketExt.getRecentOrders(2);
 
         assertEq(ids.length, 2);
         assertEq(ids[0], 3);
@@ -71,7 +69,7 @@ contract MarketViewsTest is MarketTestBase {
 
     function test_GetOrderDetails_RevertInvalidId() public {
         vm.expectRevert("invalid order id");
-        market.getOrderDetails(0);
+        marketExt.getOrderDetails(0);
     }
 
     function test_GetOrderDetails_ReturnsPlacedValues() public {
@@ -85,7 +83,7 @@ contract MarketViewsTest is MarketTestBase {
             uint16 periods_,
             uint8 replicas_,
             uint8 filled_
-        ) = market.getOrderDetails(orderId);
+        ) = marketExt.getOrderDetails(orderId);
 
         assertEq(owner_, user1);
         assertEq(uri_, FILE_URI);
@@ -103,7 +101,7 @@ contract MarketViewsTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         (, uint256 withdrawn, uint64 startPeriod, bool expired, address[] memory nodes) =
-            market.getOrderFinancials(orderId);
+            marketExt.getOrderFinancials(orderId);
 
         assertEq(withdrawn, 0);
         assertEq(startPeriod, market.currentPeriod());
@@ -122,7 +120,7 @@ contract MarketViewsTest is MarketTestBase {
         vm.prank(node1);
         market.claimRewards();
 
-        (, uint256 totalEscrowHeld, uint256 totalRewardsPaid, uint256 averageOrderValue,) = market.getFinancialStats();
+        (, uint256 totalEscrowHeld, uint256 totalRewardsPaid, uint256 averageOrderValue,) = marketExt.getFinancialStats();
 
         assertEq(totalRewardsPaid, totalCost);
         assertEq(totalEscrowHeld, 0);
@@ -135,7 +133,7 @@ contract MarketViewsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (
             uint256 activeSlotsCount,
@@ -145,7 +143,7 @@ contract MarketViewsTest is MarketTestBase {
             uint256 challengeWindowBlocks,
             uint256 challengeableOrdersCount,
             uint256 totalSlotsCount
-        ) = market.getProofSystemStats();
+        ) = marketExt.getProofSystemStats();
 
         // 1 order → ceil(sqrt(1)) = 1 slot, 1 active
         assertGt(activeSlotsCount, 0);
@@ -163,10 +161,10 @@ contract MarketViewsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (uint256 slotOrderId, address slotNode, uint256 randomness, uint256 deadlineBlock, bool isExpired) =
-            market.getSlotInfo(0);
+            marketExt.getSlotInfo(0);
 
         assertGt(slotOrderId, 0);
         assertTrue(slotNode != address(0));
@@ -181,7 +179,7 @@ contract MarketViewsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
         (
             uint256[] memory orderIds,
@@ -189,7 +187,7 @@ contract MarketViewsTest is MarketTestBase {
             uint256[] memory randomnesses,
             uint256[] memory deadlineBlocks,
             bool[] memory isExpiredArr
-        ) = market.getAllSlotInfo();
+        ) = marketExt.getAllSlotInfo();
 
         // Array length should match numChallengeSlots
         assertEq(orderIds.length, market.numChallengeSlots());
@@ -208,10 +206,10 @@ contract MarketViewsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        assertEq(market.getNodeChallengeStatus(node1), 0);
+        assertEq(marketExt.getNodeChallengeStatus(node1), 0);
 
-        market.activateSlots();
+        marketExt.activateSlots();
 
-        assertGt(market.getNodeChallengeStatus(node1), 0);
+        assertGt(marketExt.getNodeChallengeStatus(node1), 0);
     }
 }

@@ -94,14 +94,14 @@ contract MarketRewardsAccountingTest is MarketTestBase {
         _executeOrder(node1, orderId);
 
         // Activate challenge slots
-        market.activateSlots();
+        marketExt.activateSlots();
 
         // Move past deadline
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
         // node2 processes expired slots as reporter
         vm.prank(node2);
-        market.processExpiredSlots();
+        marketExt.processExpiredSlots();
 
         uint256 pending = market.reporterPendingRewards(node2);
         assertGt(pending, 0);

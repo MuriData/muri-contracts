@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {MarketAdmin} from "./MarketAdmin.sol";
+import {MarketHelpers} from "./MarketHelpers.sol";
 
 /// @notice Order lifecycle, assignment, settlement, and slashing mechanics.
-abstract contract MarketOrders is MarketAdmin {
+abstract contract MarketOrders is MarketHelpers {
     // Place a new file storage order with ZK-verified file size
     function placeOrder(
         FileMeta calldata _file,
@@ -109,72 +109,28 @@ abstract contract MarketOrders is MarketAdmin {
         // Order stays active until periods expire, not when filled
     }
 
-    // Internal function to remove order from active orders array
-    function _removeFromActiveOrders(uint256 _orderId) internal {
-        uint256 index = orderIndexInActive[_orderId];
-        uint256 lastIndex = activeOrders.length - 1;
-
-        if (index != lastIndex) {
-            uint256 lastOrderId = activeOrders[lastIndex];
-            activeOrders[index] = lastOrderId;
-            orderIndexInActive[lastOrderId] = index;
-        }
-
-        activeOrders.pop();
-        delete orderIndexInActive[_orderId];
-
-        // Also remove from challengeable orders if present
-        if (isChallengeable[_orderId]) {
-            _removeFromChallengeableOrders(_orderId);
-        }
-    }
-
-    // Internal function to add order to challengeable orders (called when first node is assigned)
-    function _addToChallengeableOrders(uint256 _orderId) internal {
-        challengeableOrders.push(_orderId);
-        orderIndexInChallengeable[_orderId] = challengeableOrders.length - 1;
-        isChallengeable[_orderId] = true;
-    }
-
-    // Internal function to remove order from challengeable orders
-    function _removeFromChallengeableOrders(uint256 _orderId) internal {
-        uint256 index = orderIndexInChallengeable[_orderId];
-        uint256 lastIndex = challengeableOrders.length - 1;
-
-        if (index != lastIndex) {
-            uint256 lastOrderId = challengeableOrders[lastIndex];
-            challengeableOrders[index] = lastOrderId;
-            orderIndexInChallengeable[lastOrderId] = index;
-        }
-
-        challengeableOrders.pop();
-        delete orderIndexInChallengeable[_orderId];
-        isChallengeable[_orderId] = false;
-    }
-
-    /// @notice Check if a node has an unresolved proof obligation (used by NodeStaking to block withdrawals)
-    function hasUnresolvedProofObligation(address _node) external view returns (bool) {
-        return _isUnresolvedProver(_node);
-    }
-
-    /// @notice O(1) check: node has active challenge slot(s)
-    function _isUnresolvedProver(address _node) internal view returns (bool) {
-        return nodeActiveChallengeCount[_node] > 0;
-    }
-
-    /// @notice O(1) check: order is currently under active challenge
-    function _isOrderUnderActiveChallenge(uint256 _orderId) internal view returns (bool) {
-        return orderActiveChallengeCount[_orderId] > 0;
-    }
-
     // Get active orders count
     function getActiveOrdersCount() external view returns (uint256) {
         return activeOrders.length;
     }
 
-    // Get all active order IDs
-    function getActiveOrders() external view returns (uint256[] memory) {
-        return activeOrders;
+    // Get a paginated slice of active order IDs
+    function getActiveOrdersPage(uint256 offset, uint256 limit)
+        external
+        view
+        returns (uint256[] memory orderIds, uint256 total)
+    {
+        total = activeOrders.length;
+        if (offset >= total) {
+            return (new uint256[](0), total);
+        }
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+        uint256 count = end - offset;
+        orderIds = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            orderIds[i] = activeOrders[offset + i];
+        }
     }
 
     // Get challengeable orders count
@@ -182,9 +138,23 @@ abstract contract MarketOrders is MarketAdmin {
         return challengeableOrders.length;
     }
 
-    // Get all challengeable order IDs
-    function getChallengeableOrders() external view returns (uint256[] memory) {
-        return challengeableOrders;
+    // Get a paginated slice of challengeable order IDs
+    function getChallengeableOrdersPage(uint256 offset, uint256 limit)
+        external
+        view
+        returns (uint256[] memory orderIds, uint256 total)
+    {
+        total = challengeableOrders.length;
+        if (offset >= total) {
+            return (new uint256[](0), total);
+        }
+        uint256 end = offset + limit;
+        if (end > total) end = total;
+        uint256 count = end - offset;
+        orderIds = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            orderIds[i] = challengeableOrders[offset + i];
+        }
     }
 
     // Get nodes assigned to an order
@@ -195,14 +165,6 @@ abstract contract MarketOrders is MarketAdmin {
     // Get orders assigned to a node
     function getNodeOrders(address _node) external view returns (uint256[] memory) {
         return nodeToOrders[_node];
-    }
-
-    // Check if an order is expired (periods have passed)
-    function isOrderExpired(uint256 _orderId) public view returns (bool) {
-        FileOrder storage order = orders[_orderId];
-        if (order.owner == address(0)) return true; // non-existent order
-        uint256 endPeriod = order.startPeriod + order.periods;
-        return currentPeriod() >= endPeriod;
     }
 
     // Complete expired orders and free up node capacity
@@ -249,9 +211,6 @@ abstract contract MarketOrders is MarketAdmin {
         address[] memory assignedNodes = orderToNodes[_orderId];
 
         // Identify nodes eligible for cancellation penalty (served >= 1 full period).
-        // Must be computed before _settleAndReleaseNodes deletes timestamps.
-        // Uses the same ceiling-division start period as reward math to prevent
-        // MEV nodes from front-running cancelOrder to siphon penalty funds.
         uint256 settlePeriod = currentPeriod();
         uint256 eligibleCount = 0;
         address[] memory eligibleNodes = new address[](assignedNodes.length);
@@ -337,8 +296,6 @@ abstract contract MarketOrders is MarketAdmin {
         uint256 slashAmount = uint256(order.numChunks) * order.price * slashPeriods;
 
         // Cap to available stake to prevent revert.
-        // Then enforce that the slash still leaves enough collateral to keep
-        // all other assignments (excluding the order being quit).
         (uint256 nodeStake,, uint64 usedBeforeQuit,) = nodeStaking.getNodeInfo(msg.sender);
         if (slashAmount > nodeStake) {
             slashAmount = nodeStake;
@@ -348,13 +305,11 @@ abstract contract MarketOrders is MarketAdmin {
         uint64 usedAfterQuit = usedBeforeQuit - order.numChunks;
         uint256 requiredStakeAfterQuit = uint256(usedAfterQuit) * STAKE_PER_CHUNK;
         uint256 maxSafeSlash = nodeStake > requiredStakeAfterQuit ? nodeStake - requiredStakeAfterQuit : 0;
-        // Cap at maxSafeSlash instead of reverting — lets trapped nodes exit
         if (slashAmount > maxSafeSlash) {
             slashAmount = maxSafeSlash;
         }
 
-        // Remove the specific assignment first so slashing cannot be used as a
-        // cheap path to force-exit unrelated orders.
+        // Remove the specific assignment
         _removeNodeFromOrder(msg.sender, _orderId, nodeIndex);
 
         // Apply slash to node's stake (no reporter reward or client comp for voluntary quit)
@@ -383,173 +338,6 @@ abstract contract MarketOrders is MarketAdmin {
         }
 
         emit NodeSlashed(_node, _slashAmount, _reason);
-    }
-
-    // Internal function to handle forced order exits due to capacity reduction
-    function _handleForcedOrderExits(address _node) internal {
-        uint256[] storage nodeOrders = nodeToOrders[_node];
-        uint256[] memory exitedOrders = new uint256[](nodeOrders.length);
-        uint256 exitCount = 0;
-
-        // Get node's new capacity and previous usage after slashing
-        (, uint64 newCapacity, uint64 usedBefore,) = nodeStaking.getNodeInfo(_node);
-        uint64 totalFreed = 0;
-        uint256 settlePeriod = currentPeriod();
-
-        // Remove node from all its orders (starting from the end to avoid index issues)
-        uint256 i = nodeOrders.length;
-        while (i > 0) {
-            i--;
-            uint256 exitOrderId = nodeOrders[i];
-            uint64 freed = _removeAssignmentDuringForcedExit(_node, exitOrderId, settlePeriod);
-
-            if (freed > 0) {
-                totalFreed += freed;
-                exitedOrders[exitCount++] = exitOrderId;
-            }
-        }
-
-        // Clear node's order list
-        delete nodeToOrders[_node];
-
-        uint64 newUsed = usedBefore > totalFreed ? usedBefore - totalFreed : 0;
-        if (newUsed > newCapacity) {
-            newUsed = newCapacity;
-        }
-
-        // Update node's used capacity to match the data that remains
-        // Skip if node was fully slashed (capacity already 0, used already set by slashNode)
-        if (newCapacity > 0 || nodeStaking.isValidNode(_node)) {
-            nodeStaking.forceReduceUsed(_node, newUsed);
-        }
-
-        // Resize the exited orders array to actual count (same pattern as cancelOrder)
-        assembly {
-            mstore(exitedOrders, exitCount)
-        }
-
-        emit ForcedOrderExits(_node, exitedOrders, totalFreed);
-    }
-
-    function _removeAssignmentDuringForcedExit(address _node, uint256 _orderId, uint256 _settlePeriod)
-        internal
-        returns (uint64 freed)
-    {
-        FileOrder storage order = orders[_orderId];
-        if (order.owner == address(0)) {
-            return 0;
-        }
-
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 j = 0; j < assignedNodes.length; j++) {
-            if (assignedNodes[j] == _node) {
-                uint256 settledReward = _settleOrderReward(_node, _orderId, _settlePeriod);
-                if (settledReward > 0) {
-                    nodePendingRewards[_node] += settledReward;
-                }
-                delete nodeOrderStartTimestamp[_node][_orderId];
-                delete nodeOrderEarnings[_orderId][_node];
-
-                if (j != assignedNodes.length - 1) {
-                    assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
-                }
-                assignedNodes.pop();
-                order.filled--;
-
-                // Last node removed — order no longer challengeable
-                if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
-                    _removeFromChallengeableOrders(_orderId);
-                }
-
-                if (order.filled < order.replicas) {
-                    emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
-                }
-
-                return order.numChunks;
-            }
-        }
-
-        return 0;
-    }
-
-    // Helper function to remove node from a single order
-    function _removeNodeFromOrder(address _node, uint256 _orderId, uint256 _nodeIndex) internal {
-        FileOrder storage order = orders[_orderId];
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        uint256 settlePeriod = currentPeriod();
-
-        uint256 settledReward = _settleOrderReward(_node, _orderId, settlePeriod);
-        if (settledReward > 0) {
-            nodePendingRewards[_node] += settledReward;
-        }
-        delete nodeOrderStartTimestamp[_node][_orderId];
-        delete nodeOrderEarnings[_orderId][_node];
-
-        // Remove node from order assignments
-        if (_nodeIndex != assignedNodes.length - 1) {
-            assignedNodes[_nodeIndex] = assignedNodes[assignedNodes.length - 1];
-        }
-        assignedNodes.pop();
-        order.filled--;
-
-        // Last node removed — order no longer challengeable
-        if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
-            _removeFromChallengeableOrders(_orderId);
-        }
-
-        if (order.filled < order.replicas) {
-            emit OrderUnderReplicated(_orderId, order.filled, order.replicas);
-        }
-
-        // Free up node capacity
-        (,, uint64 used,) = nodeStaking.getNodeInfo(_node);
-        nodeStaking.updateNodeUsed(_node, used - order.numChunks);
-
-        // Remove order from node's order list
-        _removeOrderFromNode(_node, _orderId);
-    }
-
-    // Internal helper to remove order from node's order list
-    function _removeOrderFromNode(address _node, uint256 _orderId) internal {
-        uint256[] storage nodeOrders = nodeToOrders[_node];
-        for (uint256 i = 0; i < nodeOrders.length; i++) {
-            if (nodeOrders[i] == _orderId) {
-                if (i != nodeOrders.length - 1) {
-                    nodeOrders[i] = nodeOrders[nodeOrders.length - 1];
-                }
-                nodeOrders.pop();
-                break;
-            }
-        }
-    }
-
-    function _settleAndReleaseNodes(FileOrder storage order, uint256 _orderId, uint256 _settlePeriod)
-        internal
-        returns (uint256 totalSettled, uint256 initialAssignments)
-    {
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        initialAssignments = assignedNodes.length;
-        while (assignedNodes.length > 0) {
-            address node = assignedNodes[assignedNodes.length - 1];
-            uint256 settledReward = _settleOrderReward(node, _orderId, _settlePeriod);
-            if (settledReward > 0) {
-                nodePendingRewards[node] += settledReward;
-                totalSettled += settledReward;
-            }
-            delete nodeOrderStartTimestamp[node][_orderId];
-            delete nodeOrderEarnings[_orderId][node];
-
-            (, uint64 capacity, uint64 used,) = nodeStaking.getNodeInfo(node);
-            if (capacity > 0) {
-                nodeStaking.updateNodeUsed(node, used - order.numChunks);
-            }
-
-            assignedNodes.pop();
-            if (order.filled > 0) {
-                order.filled--;
-            }
-            _removeOrderFromNode(node, _orderId);
-        }
     }
 
     // Node reward system
@@ -593,125 +381,5 @@ abstract contract MarketOrders is MarketAdmin {
                 totalClaimable += settled;
             }
         }
-    }
-
-    /// @notice View function to check claimable rewards from order escrows
-    function getClaimableRewards(address _node) external view returns (uint256 claimable) {
-        uint256[] storage nodeOrders = nodeToOrders[_node];
-        uint256 currentPer = currentPeriod();
-
-        for (uint256 i = 0; i < nodeOrders.length; i++) {
-            claimable += _calculateOrderClaimableUpTo(_node, nodeOrders[i], currentPer);
-        }
-
-        claimable += nodePendingRewards[_node];
-    }
-
-    /// @notice Calculate claimable earnings for a node/order pair up to a target period
-    function _calculateOrderClaimableUpTo(address _node, uint256 _orderId, uint256 _settlePeriod)
-        internal
-        view
-        returns (uint256)
-    {
-        FileOrder storage order = orders[_orderId];
-        if (order.owner == address(0)) return 0;
-
-        // Derive effective start period via ceiling division so nodes only earn
-        // for periods they were assigned for the ENTIRE duration, preventing
-        // boundary-sniping (joining 1 second before a period flip for a full payout).
-        uint256 startTs = nodeOrderStartTimestamp[_node][_orderId];
-        uint256 elapsed = startTs - genesisTs;
-        uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
-
-        uint256 orderEndPeriod = order.startPeriod + order.periods;
-        uint256 storageEndPeriod = _settlePeriod > orderEndPeriod ? orderEndPeriod : _settlePeriod;
-        if (storageEndPeriod <= nodeStartPeriod) return 0;
-
-        uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
-        uint256 totalEarnable = uint256(order.numChunks) * order.price * storagePeriods;
-        uint256 alreadyEarned = nodeOrderEarnings[_orderId][_node];
-        if (totalEarnable <= alreadyEarned) return 0;
-
-        uint256 newEarnings = totalEarnable - alreadyEarned;
-        uint256 availableEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
-        return newEarnings > availableEscrow ? availableEscrow : newEarnings;
-    }
-
-    /// @notice Apply reward settlement for a node/order pair and return the credited amount
-    function _settleOrderReward(address _node, uint256 _orderId, uint256 _settlePeriod)
-        internal
-        returns (uint256 claimableFromOrder)
-    {
-        claimableFromOrder = _calculateOrderClaimableUpTo(_node, _orderId, _settlePeriod);
-        if (claimableFromOrder == 0) {
-            return 0;
-        }
-
-        nodeOrderEarnings[_orderId][_node] += claimableFromOrder;
-        orderEscrowWithdrawn[_orderId] += claimableFromOrder;
-        aggregateActiveWithdrawn += claimableFromOrder;
-        lifetimeRewardsPaid += claimableFromOrder;
-        nodeEarnings[_node] += claimableFromOrder;
-    }
-
-    /// @notice Distribute slashed funds: reporter gets a percentage, client gets compensation, rest is burned
-    /// @param reporter The address that reported the failure (address(0) for no reward)
-    /// @param slashedNode The address of the node being slashed (reporter reward skipped if same as reporter)
-    /// @param totalSlashed The total slashed amount received from NodeStaking
-    /// @param affectedOrderId The order whose client should receive compensation (0 for non-order-specific slashes)
-    function _distributeSlashFunds(address reporter, address slashedNode, uint256 totalSlashed, uint256 affectedOrderId)
-        internal
-    {
-        if (totalSlashed == 0) return;
-
-        totalSlashedReceived += totalSlashed;
-
-        uint256 reporterReward = 0;
-        if (reporter != address(0) && reporter != slashedNode) {
-            reporterReward = totalSlashed * reporterRewardBps / 10000;
-            if (reporterReward > 0) {
-                reporterPendingRewards[reporter] += reporterReward;
-                reporterEarnings[reporter] += reporterReward;
-                totalReporterRewards += reporterReward;
-                emit ReporterRewardAccrued(reporter, reporterReward, totalSlashed);
-            }
-        }
-
-        uint256 clientComp = 0;
-        if (affectedOrderId != 0) {
-            address client = orders[affectedOrderId].owner;
-            if (client != address(0) && clientCompensationBps > 0) {
-                clientComp = totalSlashed * clientCompensationBps / 10000;
-                if (clientComp > 0) {
-                    pendingRefunds[client] += clientComp;
-                    totalClientCompensation += clientComp;
-                    emit ClientCompensationAccrued(client, clientComp, affectedOrderId);
-                }
-            }
-        }
-
-        uint256 burnAmount = totalSlashed - reporterReward - clientComp;
-        totalBurnedFromSlash += burnAmount;
-        if (burnAmount > 0) {
-            payable(address(0)).transfer(burnAmount);
-        }
-    }
-
-    /// @notice Distribute early-cancellation penalty to the nodes that were serving the order
-    function _distributeCancellationPenalty(uint256 _orderId, uint256 _penalty, address[] memory _nodes) internal {
-        uint256 count = _nodes.length;
-        uint256 perNode = _penalty / count;
-        uint256 distributed = 0;
-
-        for (uint256 i = 0; i < count; i++) {
-            // Last node receives the remainder to avoid rounding dust
-            uint256 share = (i == count - 1) ? _penalty - distributed : perNode;
-            nodePendingRewards[_nodes[i]] += share;
-            nodeEarnings[_nodes[i]] += share;
-            distributed += share;
-        }
-
-        totalCancellationPenalties += _penalty;
-        emit CancellationPenaltyDistributed(_orderId, _penalty, count);
     }
 }

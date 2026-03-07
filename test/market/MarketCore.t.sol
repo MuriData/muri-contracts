@@ -29,7 +29,7 @@ contract MarketCoreTest is MarketTestBase {
         assertEq(market.nextOrderId(), 2);
         assertEq(market.getActiveOrdersCount(), 1);
 
-        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = market.getOrderEscrowInfo(orderId);
+        (uint256 totalEscrow, uint256 paidToNodes, uint256 remainingEscrow) = marketExt.getOrderEscrowInfo(orderId);
         assertEq(totalEscrow, totalCost);
         assertEq(paidToNodes, 0);
         assertEq(remainingEscrow, totalCost);
