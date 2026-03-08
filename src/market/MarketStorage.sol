@@ -114,12 +114,12 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     // For larger files or slower hardware, consider increasing this value.
     // GPU-accelerated proving (icicle-gnark) reduces proving to ~1-2s.
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50; // ~100s at 2s/block on C-Chain
-    uint256 public constant MIN_PROOF_FAILURE_SLASH = 1500 * STAKE_PER_CHUNK; // floor for proof-failure slash (0.15 MURI)
+    uint256 public constant MIN_PROOF_FAILURE_SLASH = 1500 * STAKE_PER_CHUNK; // floor for proof-failure slash (0.6 MURI)
     uint256 public constant MAX_PROOF_FAILURE_SLASH_MULTIPLIER = 10; // cap for admin-tunable multiplier
     uint256 public constant MAX_SWEEP_PER_CALL = 5; // bounds gas per sweep
     uint256 public constant MAX_FORCED_EXITS_PER_SWEEP = 3; // caps forced exit cascades during a single sweep
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
-    uint256 internal constant STAKE_PER_CHUNK = 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
+    uint256 internal constant STAKE_PER_CHUNK = 4 * 10 ** 14; // mirrors NodeStaking.STAKE_PER_CHUNK
     uint256 public constant CANCEL_PENALTY_MAX_BPS = 2500; // 25% at order start
     uint256 public constant CANCEL_PENALTY_MIN_BPS = 500; // 5% near order end
     // Was: ChallengeSlot[5] public challengeSlots; — 15 storage words (slots 31–45)

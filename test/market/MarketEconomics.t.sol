@@ -42,7 +42,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
     function test_SlashMultiplier_FloorAppliedForSmallOrders() public {
         // Default order: 1024 chunks at 1e12 → scaledSlash = 1024 * 1e12 * 3 = 3.072e15
-        // Floor = 1500 * 1e14 = 1.5e17
+        // Floor = 1500 * 4e14 = 6e17
         // 3.072e15 < 1.5e17 → floor applies
         uint64 nodeCapacity = 10000;
         _stakeNode(node1, nodeCapacity, 0x1234);
@@ -59,7 +59,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
-        assertEq(actualSlash, 1500 * STAKE_PER_CHUNK, "floor = 0.15 MURI");
+        assertEq(actualSlash, 1500 * STAKE_PER_CHUNK, "floor = 0.6 MURI");
     }
 
     function test_SlashMultiplier_AdminCanUpdate() public {
@@ -652,7 +652,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Quit order1: slashPeriods = 4 + (20-4)/4 = 8
         // slashAmount = 256 * 1e12 * 8 = 2048e12
-        // usedAfterQuit = 256, requiredStakeAfterQuit = 256 * 1e14 = 2.56e16
+        // usedAfterQuit = 256, requiredStakeAfterQuit = 256 * 4e14 = 1.024e17
         // maxSafeSlash = 5.12e16 - 2.56e16 = 2.56e16
         // 2048e12 < 2.56e16 → fits, but let's test a tighter scenario
 
@@ -679,7 +679,7 @@ contract MarketEconomicsTest is MarketTestBase {
         // Order with very high price to make slashAmount large
         uint32 maxSize = 100;
         uint16 periods = 20;
-        uint256 highPrice = STAKE_PER_CHUNK; // 1e14 per chunk per period
+        uint256 highPrice = STAKE_PER_CHUNK; // 4e14 per chunk per period
 
         MarketStorage.FileMeta memory fileMeta = _fileMeta();
         uint256 cost1 = uint256(200) * uint256(periods) * 1e12;
@@ -696,8 +696,8 @@ contract MarketEconomicsTest is MarketTestBase {
         _executeOrder(node1, orderId2);
 
         // Quit order2 (highPrice): slashPeriods = 4 + (20-4)/4 = 8
-        // slashAmount = 100 * 1e14 * 8 = 8e16
-        // usedAfterQuit = 200, requiredStakeAfterQuit = 200 * 1e14 = 2e16
+        // slashAmount = 100 * 4e14 * 8 = 3.2e17
+        // usedAfterQuit = 200, requiredStakeAfterQuit = 200 * 4e14 = 8e16
         // maxSafeSlash = 3e16 - 2e16 = 1e16
         // slashAmount (8e16) > maxSafeSlash (1e16) → should be capped
 

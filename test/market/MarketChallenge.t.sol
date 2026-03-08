@@ -269,7 +269,7 @@ contract MarketChallengeTest is MarketTestBase {
 
     function test_ProofFailureSlash_ScalesWithOrderValue() public {
         // 1 MB order at 1e12 price → scaledSlash = 1_048_576 * 1e12 * 3 = ~3.15 MURI
-        // This exceeds the 0.15 MURI floor, so per-slot slash = scaledSlash
+        // This exceeds the 0.6 MURI floor, so per-slot slash = scaledSlash
         // Proportional activation: 1 order → 1 slot activated
         uint32 largeSize = 1_048_576; // 1M chunks
         uint256 price = 1e12;
@@ -325,7 +325,7 @@ contract MarketChallengeTest is MarketTestBase {
         (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
         uint256 actualSlash = stakeBefore - stakeAfter;
 
-        uint256 floor = 1500 * STAKE_PER_CHUNK; // 0.15 MURI
+        uint256 floor = 1500 * STAKE_PER_CHUNK; // 0.6 MURI
         // 1 order → 1 slot activated → total = 1 * floor
         assertEq(actualSlash, floor, "small order slash should equal floor");
     }

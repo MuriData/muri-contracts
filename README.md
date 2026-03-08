@@ -91,7 +91,7 @@ A node's ZK public key is **permanent** once staked — no rotation is supported
 - **Reward claims** — Nodes withdraw via `claimRewards`. Pending rewards from removed assignments are tracked in `nodePendingRewards`.
 - **Reporter rewards** — Configurable percentage (`reporterRewardBps`, default 10%, max 50%) of slash proceeds goes to the reporter who triggered the slash via `processExpiredSlots` or `reportKeyLeak`. Claimed via `claimReporterRewards`.
 - **Pull-payment refunds** — Overpayments and escrow refunds queue to `pendingRefunds` and are claimed via `withdrawRefund`, preventing reentrancy.
-- **Penalties** — Early cancellation: 10% of remaining escrow distributed to nodes. Proof failure: value-proportional slash with `MIN_PROOF_FAILURE_SLASH = 0.05 MURI` floor. Forced exit: additional 50% penalty. Slashed stake burned to `address(0)`.
+- **Penalties** — Early cancellation: 10% of remaining escrow distributed to nodes. Proof failure: value-proportional slash with `MIN_PROOF_FAILURE_SLASH = 0.6 MURI` floor. Forced exit: additional 50% penalty. Slashed stake burned to `address(0)`.
 - **Reentrancy protection** — A simple `_locked` flag guards all state-mutating entry points.
 
 ---
@@ -127,12 +127,12 @@ forge fmt --check        # check formatting
 |---|---|---|
 | `PERIOD` | 7 days | Single billing unit |
 | `EPOCH` | 28 days | 4 periods |
-| `STAKE_PER_CHUNK` | 10^14 wei | Collateral per chunk of capacity |
+| `STAKE_PER_CHUNK` | 4 x 10^14 wei | Collateral per chunk of capacity |
 | `MAX_REPLICAS` | 10 | Cap replicas per order |
 | `MAX_ORDERS_PER_NODE` | 50 | Cap orders per node |
 | `NUM_CHALLENGE_SLOTS` | 5 | Parallel challenge slots |
 | `CHALLENGE_WINDOW_BLOCKS` | 50 | ~100s proof deadline |
-| `MIN_PROOF_FAILURE_SLASH` | 0.05 MURI | Floor for proof-failure slash |
+| `MIN_PROOF_FAILURE_SLASH` | 0.6 MURI | Floor for proof-failure slash |
 | `QUIT_SLASH_PERIODS` | 3 | Periods charged on voluntary quit |
 
 ---

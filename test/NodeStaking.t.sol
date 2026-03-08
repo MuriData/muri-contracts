@@ -12,7 +12,7 @@ contract NodeStakingTest is Test {
     address public node2 = address(0x2);
     address public node3 = address(0x3);
 
-    uint256 public constant STAKE_PER_CHUNK = 10 ** 14;
+    uint256 public constant STAKE_PER_CHUNK = 4 * 10 ** 14;
     uint64 public constant MIN_CAPACITY = 1;
 
     event NodeStaked(address indexed node, uint256 stake, uint64 capacity);

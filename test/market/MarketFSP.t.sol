@@ -21,7 +21,7 @@ contract MarketFSPTest is Test {
     address internal user1 = address(0x1111);
     address internal node1 = address(0x3333);
 
-    uint256 internal constant STAKE_PER_CHUNK = 10 ** 14;
+    uint256 internal constant STAKE_PER_CHUNK = 4 * 10 ** 14;
 
     // --- Fixture values from fsp_proof_fixture.json ---
     uint256 constant FSP_ROOT = 0x1ad3120e4d04d62860e924470a1c4cae995677cc4d20852125939be6b1341459;

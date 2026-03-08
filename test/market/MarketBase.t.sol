@@ -25,7 +25,7 @@ abstract contract MarketTestBase is Test {
     address internal node3 = address(0x5555);
 
     uint64 internal constant TEST_CAPACITY = 1024;
-    uint256 internal constant STAKE_PER_CHUNK = 10 ** 14;
+    uint256 internal constant STAKE_PER_CHUNK = 4 * 10 ** 14;
     uint256 internal constant PERIOD = 7 days;
     uint256 internal constant CHALLENGE_WINDOW_BLOCKS = 50;
 

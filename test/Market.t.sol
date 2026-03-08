@@ -26,7 +26,7 @@ contract MarketTest is Test {
     address public node3 = address(0x5555);
 
     uint64 public constant TEST_CAPACITY = 1024; // 1KB (smaller for testing)
-    uint256 public constant STAKE_PER_CHUNK = 10 ** 14;
+    uint256 public constant STAKE_PER_CHUNK = 4 * 10 ** 14;
     uint256 public constant TEST_STAKE = uint256(TEST_CAPACITY) * STAKE_PER_CHUNK;
     uint256 public constant PERIOD = 7 days;
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50;
@@ -948,7 +948,7 @@ contract MarketTest is Test {
         _executeOrder(node1, orderId);
 
         // slashAmount = maxSize * price = 256 * 1e12 = 256e12
-        // minStake = 256 * 1e14 = 256e14
+        // minStake = 256 * 4e14 = 1.024e17
         // After slash, stake < requiredStake triggers forcedExit = true
         // The additional 50% penalty makes it more likely to force exit
         vm.prank(node1);

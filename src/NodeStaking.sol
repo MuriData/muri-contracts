@@ -49,7 +49,7 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
     address[] public nodeList; // List of all registered node addresses
     mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
     mapping(uint256 => address) public publicKeyOwner; // enforces unique ZK identity keys
-    uint256 public constant STAKE_PER_CHUNK = 10 ** 14; // configurable
+    uint256 public constant STAKE_PER_CHUNK = 4 * 10**14; // configurable
 
     /// @dev BN254 scalar field order (Fr). Public key must be a valid field element.
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
