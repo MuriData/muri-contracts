@@ -57,10 +57,12 @@ contract UpgradeTest is Test {
 
         // Mock verifiers to always succeed
         vm.mockCall(
-            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
+            address(market.fspVerifier()),
+            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
+            abi.encode()
         );
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
         );
 
         vm.deal(user1, 100 ether);
@@ -86,13 +88,13 @@ contract UpgradeTest is Test {
     {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
-        uint256[8] memory fspProof;
+        uint256[4] memory fspProof;
         vm.prank(owner_);
         orderId = market.placeOrder{value: totalCost}(meta, numChunks, periods, replicas, price, fspProof);
     }
 
     function _executeOrder(address node, uint256 orderId) internal {
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node);
         market.executeOrder(orderId, proof, bytes32(0));
     }
@@ -168,14 +170,12 @@ contract UpgradeTest is Test {
         address preKeyleakVerifier = address(market.keyleakVerifier());
         address preNodeStaking = address(market.nodeStaking());
         (
-            address orderOwner,
-            ,
+            address orderOwner,,
             uint32 numChunks,
             uint16 periods,
             uint8 replicas,
             uint256 price,
-            uint8 filled,
-            ,
+            uint8 filled,,
             uint256 escrow
         ) = market.orders(orderId);
 
@@ -195,14 +195,12 @@ contract UpgradeTest is Test {
 
         // Verify order details preserved
         (
-            address postOrderOwner,
-            ,
+            address postOrderOwner,,
             uint32 postNumChunks,
             uint16 postPeriods,
             uint8 postReplicas,
             uint256 postPrice,
-            uint8 postFilled,
-            ,
+            uint8 postFilled,,
             uint256 postEscrow
         ) = market.orders(orderId);
         assertEq(postOrderOwner, orderOwner, "order owner changed");
@@ -322,10 +320,12 @@ contract UpgradeTest is Test {
 
         // Mock verifiers on the (possibly new) verifier addresses
         vm.mockCall(
-            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
+            address(market.fspVerifier()),
+            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
+            abi.encode()
         );
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
         );
 
         // --- Verify core operations still work post-upgrade ---

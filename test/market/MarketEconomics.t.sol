@@ -179,7 +179,7 @@ contract MarketEconomicsTest is MarketTestBase {
     }
 
     function test_OnDemand_SubmitProofReverts_WhenNoChallenge() public {
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node1);
         vm.expectRevert("no active on-demand challenge");
         marketExt.submitOnDemandProof(1, proof, bytes32(uint256(1)));
@@ -261,7 +261,7 @@ contract MarketEconomicsTest is MarketTestBase {
         market.cancelOrder(orderId);
 
         // Node submits proof (mocked verifier accepts any proof)
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node1);
         marketExt.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
 
@@ -280,7 +280,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Issue and resolve challenge
         marketExt.challengeNode(orderId, node1);
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node1);
         marketExt.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
 

@@ -12,7 +12,7 @@ abstract contract MarketChallenge is MarketHelpers {
     /// Phase 2: validate caller is the challenged node for this slot.
     /// Phase 3: verify ZK proof.
     /// Phase 4: advance slot to next challenge.
-    function submitProof(uint256 _slotIndex, uint256[8] calldata _proof, bytes32 _commitment) external nonReentrant {
+    function submitProof(uint256 _slotIndex, uint256[4] calldata _proof, bytes32 _commitment) external nonReentrant {
         require(_slotIndex < numChallengeSlots, "invalid slot index");
 
         // Phase 1: sweep expired slots — slashes expired nodes, earns reporter rewards for caller.
@@ -38,7 +38,7 @@ abstract contract MarketChallenge is MarketHelpers {
         uint256 slotRandomness = slot.randomness;
         uint256[4] memory publicInputs = [uint256(_commitment), slotRandomness, publicKey, fileRootHash];
 
-        poiVerifier.verifyProof(_proof, publicInputs);
+        poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
@@ -218,7 +218,7 @@ abstract contract MarketChallenge is MarketHelpers {
     }
 
     /// @notice Submit proof for an on-demand challenge. Only the challenged node can call.
-    function submitOnDemandProof(uint256 _orderId, uint256[8] calldata _proof, bytes32 _commitment)
+    function submitOnDemandProof(uint256 _orderId, uint256[4] calldata _proof, bytes32 _commitment)
         external
         nonReentrant
     {
@@ -233,7 +233,7 @@ abstract contract MarketChallenge is MarketHelpers {
         require(publicKey != 0, "node public key not set");
 
         uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot];
-        poiVerifier.verifyProof(_proof, publicInputs);
+        poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement
         challenge.randomness = 0;

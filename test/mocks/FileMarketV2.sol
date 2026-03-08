@@ -2,9 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {FileMarket} from "../../src/Market.sol";
-import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
-import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
-import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
+import {IPoiVerifier, IFspVerifier, IKeyLeakVerifier} from "../../src/interfaces/IVerifiers.sol";
 
 /// @notice Minimal V2 mock for upgrade testing. Appends storage after inherited __gap.
 contract FileMarketV2 is FileMarket {
@@ -23,9 +21,9 @@ contract FileMarketV2 is FileMarket {
         address _keyleakVerifier
     ) external reinitializer(2) {
         v2ExampleParam = _param;
-        poiVerifier = Verifier(_poiVerifier);
-        fspVerifier = FspVerifier(_fspVerifier);
-        keyleakVerifier = KeyLeakVerifier(_keyleakVerifier);
+        poiVerifier = IPoiVerifier(_poiVerifier);
+        fspVerifier = IFspVerifier(_fspVerifier);
+        keyleakVerifier = IKeyLeakVerifier(_keyleakVerifier);
     }
 
     function version() external pure returns (uint256) {

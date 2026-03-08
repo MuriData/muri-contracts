@@ -62,12 +62,14 @@ abstract contract MarketTestBase is Test {
 
         // Mock FSP verifier to always succeed so existing tests don't need valid proofs
         vm.mockCall(
-            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
+            address(market.fspVerifier()),
+            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
+            abi.encode()
         );
 
         // Mock PoI verifier to always succeed so existing tests don't need valid proofs
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
         );
 
         vm.deal(user1, 100 ether);
@@ -92,11 +94,11 @@ abstract contract MarketTestBase is Test {
         _stakeNode(node, TEST_CAPACITY, key);
     }
 
-    function _emptyFspProof() internal pure returns (uint256[8] memory proof) {
+    function _emptyFspProof() internal pure returns (uint256[4] memory proof) {
         // Returns zeroed proof array — works with mocked FSP verifier
     }
 
-    function _emptyPoiProof() internal pure returns (uint256[8] memory proof) {
+    function _emptyPoiProof() internal pure returns (uint256[4] memory proof) {
         // Returns zeroed proof array — works with mocked PoI verifier
     }
 
@@ -148,7 +150,7 @@ contract BaseRevertingReceiver {
     {
         uint256 totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: 0x123, uri: "test"});
-        uint256[8] memory fspProof;
+        uint256[4] memory fspProof;
         market.placeOrder{value: totalCost + overpay}(meta, numChunks, periods, replicas, price, fspProof);
     }
 

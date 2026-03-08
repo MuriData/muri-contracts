@@ -12,7 +12,7 @@ abstract contract MarketOrders is MarketHelpers {
         uint16 _periods,
         uint8 _replicas,
         uint256 _pricePerChunkPerPeriod,
-        uint256[8] calldata _fspProof
+        uint256[4] calldata _fspProof
     ) external payable nonReentrant returns (uint256 orderId) {
         require(_file.root > 0 && _file.root < SNARK_SCALAR_FIELD, "root not in Fr");
         require(_numChunks > 0, "invalid size");
@@ -22,7 +22,7 @@ abstract contract MarketOrders is MarketHelpers {
 
         // Verify file size proof: proves numChunks is the exact boundary in the SMT
         uint256[2] memory fspInputs = [_file.root, uint256(_numChunks)];
-        fspVerifier.verifyProof(_fspProof, fspInputs);
+        fspVerifier.verifyCompressedProof(_fspProof, fspInputs);
 
         uint256 totalCost = uint256(_numChunks) * uint256(_periods) * _pricePerChunkPerPeriod * uint256(_replicas);
         require(msg.value >= totalCost, "insufficient payment");
@@ -59,10 +59,7 @@ abstract contract MarketOrders is MarketHelpers {
     }
 
     // Node executes an order (claims a replica slot) with PoI proof of data possession
-    function executeOrder(uint256 _orderId, uint256[8] calldata _proof, bytes32 _commitment)
-        external
-        nonReentrant
-    {
+    function executeOrder(uint256 _orderId, uint256[4] calldata _proof, bytes32 _commitment) external nonReentrant {
         require(nodeStaking.isValidNode(msg.sender), "not a valid node");
 
         FileOrder storage order = orders[_orderId];
@@ -85,7 +82,7 @@ abstract contract MarketOrders is MarketHelpers {
         require(publicKey != 0, "node public key not set");
         uint256 randomness = uint256(keccak256(abi.encodePacked(order.file.root, publicKey))) % SNARK_SCALAR_FIELD;
         uint256[4] memory publicInputs = [uint256(_commitment), randomness, publicKey, order.file.root];
-        poiVerifier.verifyProof(_proof, publicInputs);
+        poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         // Assign node to order
         assignedNodes.push(msg.sender);

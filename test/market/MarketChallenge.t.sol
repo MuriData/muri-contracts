@@ -39,7 +39,7 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node1, orderId);
         marketExt.activateSlots();
 
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node1);
         vm.expectRevert("invalid slot index");
         marketExt.submitProof(100, proof, bytes32(uint256(1)));
@@ -63,7 +63,7 @@ contract MarketChallengeTest is MarketTestBase {
         marketExt.processExpiredSlots();
 
         // Now slot 0 should be idle but numChallengeSlots >= 1
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node1);
         vm.expectRevert("slot is idle");
         marketExt.submitProof(0, proof, bytes32(uint256(1)));
@@ -79,7 +79,7 @@ contract MarketChallengeTest is MarketTestBase {
         marketExt.activateSlots();
 
         // node2 tries to submit proof for node1's challenge
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(node2);
         vm.expectRevert("not the challenged node");
         marketExt.submitProof(0, proof, bytes32(uint256(1)));
@@ -94,7 +94,7 @@ contract MarketChallengeTest is MarketTestBase {
         // submitProof sweeps expired slots first, which slashes and deactivates/re-advances
         // the slot. So the exact error depends on post-sweep state ("slot is idle" if
         // deactivated, or "not the challenged node" if re-advanced to someone else).
-        uint256[8] memory proof;
+        uint256[4] memory proof;
         vm.prank(challengedNode);
         vm.expectRevert();
         marketExt.submitProof(0, proof, bytes32(uint256(1)));

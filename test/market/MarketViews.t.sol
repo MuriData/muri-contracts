@@ -120,7 +120,8 @@ contract MarketViewsTest is MarketTestBase {
         vm.prank(node1);
         market.claimRewards();
 
-        (, uint256 totalEscrowHeld, uint256 totalRewardsPaid, uint256 averageOrderValue,) = marketExt.getFinancialStats();
+        (, uint256 totalEscrowHeld, uint256 totalRewardsPaid, uint256 averageOrderValue,) =
+            marketExt.getFinancialStats();
 
         assertEq(totalRewardsPaid, totalCost);
         assertEq(totalEscrowHeld, 0);

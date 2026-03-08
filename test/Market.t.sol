@@ -65,12 +65,14 @@ contract MarketTest is Test {
 
         // Mock FSP verifier to always succeed so tests don't need valid proofs
         vm.mockCall(
-            address(market.fspVerifier()), abi.encodeWithSelector(FspVerifier.verifyProof.selector), abi.encode()
+            address(market.fspVerifier()),
+            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
+            abi.encode()
         );
 
         // Mock PoI verifier to always succeed so tests don't need valid proofs
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyProof.selector), abi.encode()
+            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
         );
 
         // Fund test accounts
@@ -81,11 +83,11 @@ contract MarketTest is Test {
         vm.deal(node3, 100 ether);
     }
 
-    function _emptyFspProof() internal pure returns (uint256[8] memory proof) {
+    function _emptyFspProof() internal pure returns (uint256[4] memory proof) {
         // Returns zeroed proof array — works with mocked FSP verifier
     }
 
-    function _emptyPoiProof() internal pure returns (uint256[8] memory proof) {}
+    function _emptyPoiProof() internal pure returns (uint256[4] memory proof) {}
 
     function _executeOrder(address node, uint256 orderId) internal {
         vm.prank(node);
@@ -1881,15 +1883,17 @@ contract MarketTest is Test {
     uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 48;
     uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 49;
 
-    function _zkProof() internal pure returns (uint256[8] memory proof) {
-        proof[0] = ZK_PROOF_0;
-        proof[1] = ZK_PROOF_1;
-        proof[2] = ZK_PROOF_2;
-        proof[3] = ZK_PROOF_3;
-        proof[4] = ZK_PROOF_4;
-        proof[5] = ZK_PROOF_5;
-        proof[6] = ZK_PROOF_6;
-        proof[7] = ZK_PROOF_7;
+    function _zkProof() internal view returns (uint256[4] memory proof) {
+        uint256[8] memory rawProof;
+        rawProof[0] = ZK_PROOF_0;
+        rawProof[1] = ZK_PROOF_1;
+        rawProof[2] = ZK_PROOF_2;
+        rawProof[3] = ZK_PROOF_3;
+        rawProof[4] = ZK_PROOF_4;
+        rawProof[5] = ZK_PROOF_5;
+        rawProof[6] = ZK_PROOF_6;
+        rawProof[7] = ZK_PROOF_7;
+        proof = Verifier(address(market.poiVerifier())).compressProof(rawProof);
     }
 
     /// @dev Set up a challenge slot where `prover` is the challenged node for `orderId`,
@@ -1949,7 +1953,7 @@ contract MarketTest is Test {
 
         _setupZKSlotChallenge(node1, orderId);
 
-        uint256[8] memory proof = _zkProof();
+        uint256[4] memory proof = _zkProof();
         vm.prank(node1);
         marketExt.submitProof(0, proof, ZK_COMMITMENT);
 
@@ -1973,7 +1977,7 @@ contract MarketTest is Test {
         _setupZKSlotChallenge(node1, orderId);
 
         // Corrupt the proof
-        uint256[8] memory badProof = _zkProof();
+        uint256[4] memory badProof = _zkProof();
         badProof[0] = badProof[0] + 1;
 
         // Clear the blanket PoI mock so the real verifier rejects the bad proof
@@ -1991,7 +1995,7 @@ contract MarketTest is Test {
 
         _setupZKSlotChallenge(node1, orderId);
 
-        uint256[8] memory proof = _zkProof();
+        uint256[4] memory proof = _zkProof();
         bytes32 wrongCommitment = bytes32(uint256(0xDEADBEEF));
 
         // Clear the blanket PoI mock so the real verifier rejects the wrong commitment
@@ -2009,7 +2013,7 @@ contract MarketTest is Test {
 
         _setupZKSlotChallenge(node1, orderId);
 
-        uint256[8] memory proof = _zkProof();
+        uint256[4] memory proof = _zkProof();
 
         // node2 tries to submit for node1's slot
         vm.prank(node2);
@@ -2027,7 +2031,7 @@ contract MarketTest is Test {
         // Move past deadline
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
 
-        uint256[8] memory proof = _zkProof();
+        uint256[4] memory proof = _zkProof();
         // After sweep, the expired slot is processed (slashed and deactivated/re-advanced),
         // so the slot is no longer in its original state. The exact error depends on state:
         // "slot is idle" if deactivated, or "not the challenged node" if re-advanced to someone else.
@@ -2051,7 +2055,7 @@ contract MarketTest is Test {
         bytes32 nodeInfoBase = keccak256(abi.encode(node3, uint256(1)));
         vm.store(address(nodeStaking), bytes32(uint256(nodeInfoBase) + 2), bytes32(uint256(0)));
 
-        uint256[8] memory proof = _zkProof();
+        uint256[4] memory proof = _zkProof();
         vm.prank(node3);
         vm.expectRevert("node public key not set");
         marketExt.submitProof(0, proof, ZK_COMMITMENT);
@@ -2320,11 +2324,11 @@ contract MaliciousMarketClaim {
         // Place order
         MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: fileRoot, uri: fileUri});
         uint256 totalCost = uint256(maxSize) * uint256(periods) * price;
-        uint256[8] memory emptyProof;
+        uint256[4] memory emptyProof;
         market.placeOrder{value: totalCost}(meta, uint32(maxSize), periods, 1, price, emptyProof);
 
         // Execute order as this contract
-        uint256[8] memory poiProof;
+        uint256[4] memory poiProof;
         market.executeOrder(1, poiProof, bytes32(0));
     }
 
@@ -2360,14 +2364,14 @@ contract RevertingReceiver {
         uint16 periods = 2;
         uint256 price = 1e12;
         lastTotalCost = uint256(maxSize) * uint256(periods) * price;
-        uint256[8] memory emptyProof;
+        uint256[4] memory emptyProof;
         market.placeOrder{value: lastTotalCost}(fileMeta, maxSize, periods, 1, price, emptyProof);
     }
 
     function placeOrderWithParams(uint32 maxSize, uint16 periods, uint8 replicas, uint256 price) external {
         lastTotalCost = uint256(maxSize) * uint256(periods) * price * uint256(replicas);
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: 0x123, uri: "test"});
-        uint256[8] memory emptyProof;
+        uint256[4] memory emptyProof;
         market.placeOrder{value: lastTotalCost}(fileMeta, maxSize, periods, replicas, price, emptyProof);
     }
 
