@@ -24,19 +24,19 @@ contract MarketFSPTest is Test {
     uint256 internal constant STAKE_PER_CHUNK = 4 * 10 ** 14;
 
     // --- Fixture values from fsp_proof_fixture.json ---
-    uint256 constant FSP_ROOT = 0x1ad3120e4d04d62860e924470a1c4cae995677cc4d20852125939be6b1341459;
+    uint256 constant FSP_ROOT = 0x18b3b3b2725896132b5bc40a1046132880775d2160f1fbf5dc70ffc58a9228c7;
     uint32 constant FSP_NUM_CHUNKS = 8;
 
     function _fspProof() internal view returns (uint256[4] memory proof) {
         uint256[8] memory rawProof;
-        rawProof[0] = 0x23f822715db54d5ba8c8b9d55bc670319b814eb738c87d502d4bc61f90ac7e9b;
-        rawProof[1] = 0x248b77e5fd5541e0265b46b5c3d7cd48b7fb80c4867eb677b0c492ef784b013f;
-        rawProof[2] = 0x128bc19b3a965d2bb1ee8a0f951f468e31c3e9638416bbcd977b59a57465fb6a;
-        rawProof[3] = 0x2b0df41e241293067659061b11e169ea4966c0796e438fd11a6fffcc027e5699;
-        rawProof[4] = 0x0865238d6f67abca86f1a1fabfac792666be9318ae358a481e9cca9a15f15079;
-        rawProof[5] = 0x172ee2cde62167b8554f64ef767224307ba8c8d8b0b691786e6a116585208953;
-        rawProof[6] = 0x134f3085f0228c010887efd2f0b828ff49b56cff1323c7e20fdc93ff93c6213e;
-        rawProof[7] = 0x14abf311ab8ae35c4878d9058ff85b0e0060fc6fe795465d1fef30af7aae6e87;
+        rawProof[0] = 0x2989e4633aeca515c82251fc0a8a52519693a79a55a5d3a877ab47b283a1ebc9;
+        rawProof[1] = 0x2070e6ac3ac6034e5ce8334a596a425e47537675598fc2decd97e7582339d45f;
+        rawProof[2] = 0x1d95ea80d2976f97741177a5f78b174bf02f4f0f9c6df24f16632bafb50df800;
+        rawProof[3] = 0x2d5d5701c35e1c2427e9349848ae445d2eb935940ad7147208bde96707993e55;
+        rawProof[4] = 0x173f8e924fa8a6f18e5026186aec9f7ec6743c404f8e6dd46ff77e744eb885d1;
+        rawProof[5] = 0x1120ed653a041099aad35e811f2aa93ac7a87add3368a2ce3fa4aef7aa92b3ee;
+        rawProof[6] = 0x1796e53b378dd58e5d5790054c9557263982416763fb2707a021463ec330d816;
+        rawProof[7] = 0x28b86dfdd8b99565d108f4f78b460e3a546e3c2c646d3e1903e2f4a859b1e703;
         proof = FspVerifier(address(market.fspVerifier())).compressProof(rawProof);
     }
 
