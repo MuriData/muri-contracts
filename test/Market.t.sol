@@ -1841,14 +1841,14 @@ contract MarketTest is Test {
     uint256 constant ZK_PUB_KEY = 0x23711d48e08f5ea81d4c9f514ff8aa889adb5cab4130e70dbfd4925c363c5054;
     uint256 constant ZK_NUM_LEAVES = 0x0000000000000000000000000000000000000000000000000000000000000008;
 
-    uint256 constant ZK_PROOF_0 = 0x209fd2b918f284bca1af70bd630e4187ca4ee37b27a5033be33eaf0c1534499d;
-    uint256 constant ZK_PROOF_1 = 0x22789d5f30a7c08417502f7f1a0edd254f87d16fed8f377af2a4fa33da835293;
-    uint256 constant ZK_PROOF_2 = 0x148d331933fad1b95f3c5685bda3b5bdfbc44e0546bb65fbdb833f347a7597f8;
-    uint256 constant ZK_PROOF_3 = 0x2d1601c48459dfbdfc38cfdb3335393e97b5e345fb67da35d0372a223b8b1d80;
-    uint256 constant ZK_PROOF_4 = 0x05ab92bb667b4fed65888b0e3bd5a21d184545a47daa0e0df10c37c3f9ff8906;
-    uint256 constant ZK_PROOF_5 = 0x09d841afbd85e122027da638058ca83338065f9fe090680f9d1d557ad9b67184;
-    uint256 constant ZK_PROOF_6 = 0x1451f75013934006e920e0c97d89f434ec7c26b7f3a82dcfe179527705639410;
-    uint256 constant ZK_PROOF_7 = 0x2fc973302fce50cb74e5cf369aa63e30d393c1e0cce3e3c09f2a3ce8c7cf4bb0;
+    uint256 constant ZK_PROOF_0 = 0x2adb26256ac8cf080d88516e3c9e669548fc8ef1be5ead37f6f688849f7eac21;
+    uint256 constant ZK_PROOF_1 = 0x126e929c3d7ee78a196863e64413054b5b94789fda9a9af1071624d79a6bbef3;
+    uint256 constant ZK_PROOF_2 = 0x0aa4302000f211cac24575de7ffdf68c11fce3bee3a6be1f7e04cffabdfc069e;
+    uint256 constant ZK_PROOF_3 = 0x291d000570c821e6a41dc0f02f88a7a054d57a4222707520503b2c99404a9ae8;
+    uint256 constant ZK_PROOF_4 = 0x06d1d59e3e351b272015a867cc33a89efa8d0ad4fb6308194dee45b645e85dcf;
+    uint256 constant ZK_PROOF_5 = 0x21b505b51eebcc28d06bcf8510497ed4184e5e49040b8495fc3715c67e9e7c75;
+    uint256 constant ZK_PROOF_6 = 0x25a7608f7658c4a42a19c779405d5291e614da27a52136703d65bba8ba409fe9;
+    uint256 constant ZK_PROOF_7 = 0x14f632c6971a599361e6ec3f229b641641bf8908acbae4d54f662c4bfae0f97a;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
     // challengeSlots is now a mapping at slot 30, numChallengeSlots at slot 31
