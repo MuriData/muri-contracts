@@ -31,21 +31,23 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     mapping(address => bool) public slashAuthorities;
     uint256 private _marketLock;
 
-    struct FileMeta {
-        uint256 root; // Merkle root hash of the file for POI verification
-        string uri;
+    struct FileOrder {
+        // Slot 0: tightly packed (20 + 1 + 1 + 4 + 2 + 4 = 32 bytes)
+        address owner; // 20B
+        uint8 filled; // 1B — replica slots already taken
+        uint8 replicas; // 1B — desired redundancy
+        uint32 numChunks; // 4B — ZK-verified chunk count
+        uint16 periods; // 2B — billing periods to store
+        uint32 startPeriod; // 4B — period index when storage begins
+        // Slot 1
+        uint256 fileRoot; // 32B — Poseidon2 Merkle root hash for POI verification
+        // Slot 2
+        uint256 escrow; // 32B — prepaid funds held in contract (price derivable: escrow / numChunks / periods / replicas)
     }
 
-    struct FileOrder {
-        address owner;
-        FileMeta file;
-        uint32 numChunks; // ZK-verified chunk count
-        uint16 periods; // billing periods to store
-        uint8 replicas; // desired redundancy
-        uint256 price; // wei / chunk / period (quoting module can update global price curves)
-        uint8 filled; // replica slots already taken
-        uint64 startPeriod; // when storage begins
-        uint256 escrow; // prepaid funds held in contract
+    struct NodeAssignment {
+        address node; // 20B
+        uint32 startPeriod; // 4B — period when this node was assigned
     }
 
     // --- Challenge slot struct for parallel event-driven challenges ---
@@ -74,20 +76,21 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     mapping(uint256 => uint256) public orderIndexInChallengeable; // Maps order ID to index in challengeableOrders
     mapping(uint256 => bool) public isChallengeable; // Whether order is currently in challengeableOrders
 
-    // Node assignments
-    mapping(uint256 => address[]) public orderToNodes; // order ID -> assigned nodes
+    // URI stored separately (written once at order creation, not in hot path)
+    mapping(uint256 => string) public orderUri;
+
+    // Node assignments (packed: node address + start period in one slot per assignment)
+    mapping(uint256 => NodeAssignment[]) public orderAssignments; // order ID -> assigned nodes with start periods
     mapping(address => uint256[]) public nodeToOrders; // node -> assigned order IDs
 
     // Node rewards system
     mapping(address => uint256) public nodePendingRewards; // rewards owed after assignment removal
     mapping(address => uint256) public nodeEarnings; // total earnings accumulated
     mapping(address => uint256) public nodeWithdrawn; // total amount withdrawn
-    mapping(address => uint256) public nodeLastClaimPeriod; // last period when rewards were claimed
-    mapping(address => mapping(uint256 => uint256)) public nodeOrderStartTimestamp; // node -> orderId -> block.timestamp when assigned
+    mapping(address => uint256) public nodeLastClaimPeriod; // settlement watermark — last period when rewards were claimed
 
     // Escrow tracking for proper payment distribution
     mapping(uint256 => uint256) public orderEscrowWithdrawn; // orderId -> amount already paid to nodes
-    mapping(uint256 => mapping(address => uint256)) public nodeOrderEarnings; // orderId -> node -> earned amount
 
     // Reporter reward system for slash redistribution
     uint256 public reporterRewardBps;
@@ -163,8 +166,8 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     // Persistent cursor for amortized expired-slot sweep
     uint256 public sweepCursor;
 
-    // Reserve 195 slots for future storage variables (200 - 5 new slots)
-    uint256[195] private __gap;
+    // Reserve 196 slots for future storage variables
+    uint256[196] private __gap;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);

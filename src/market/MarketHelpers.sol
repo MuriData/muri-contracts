@@ -11,7 +11,7 @@ abstract contract MarketHelpers is MarketAdmin {
     function isOrderExpired(uint256 _orderId) public view returns (bool) {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return true; // non-existent order
-        uint256 endPeriod = order.startPeriod + order.periods;
+        uint256 endPeriod = uint256(order.startPeriod) + uint256(order.periods);
         return currentPeriod() >= endPeriod;
     }
 
@@ -30,7 +30,40 @@ abstract contract MarketHelpers is MarketAdmin {
         return orderActiveChallengeCount[_orderId] > 0;
     }
 
-    /// @notice Calculate claimable earnings for a node/order pair up to a target period
+    /// @notice Derive price per chunk per period from the order's escrow.
+    /// Always exact division since placeOrder enforces escrow = numChunks * periods * price * replicas.
+    function _orderPrice(FileOrder storage order) internal view returns (uint256) {
+        return order.escrow / (uint256(order.numChunks) * uint256(order.periods) * uint256(order.replicas));
+    }
+
+    /// @notice Find the start period for a node's assignment to an order.
+    function _getNodeStartPeriod(uint256 _orderId, address _node)
+        internal
+        view
+        returns (uint32 startPeriod, bool found)
+    {
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        for (uint256 i = 0; i < assignments.length; i++) {
+            if (assignments[i].node == _node) {
+                return (assignments[i].startPeriod, true);
+            }
+        }
+        return (0, false);
+    }
+
+    /// @notice Find a node's index in the assignment array.
+    function _getNodeAssignmentIndex(uint256 _orderId, address _node) internal view returns (uint256 index, bool found) {
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        for (uint256 i = 0; i < assignments.length; i++) {
+            if (assignments[i].node == _node) {
+                return (i, true);
+            }
+        }
+        return (0, false);
+    }
+
+    /// @notice Calculate claimable earnings for a node/order pair up to a target period.
+    /// Uses nodeLastClaimPeriod as the settlement watermark to avoid per-(order,node) earnings tracking.
     function _calculateOrderClaimableUpTo(address _node, uint256 _orderId, uint256 _settlePeriod)
         internal
         view
@@ -39,22 +72,21 @@ abstract contract MarketHelpers is MarketAdmin {
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) return 0;
 
-        uint256 startTs = nodeOrderStartTimestamp[_node][_orderId];
-        uint256 elapsed = startTs - genesisTs;
-        uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
+        (uint32 nodeStartPeriod, bool found) = _getNodeStartPeriod(_orderId, _node);
+        if (!found) return 0;
 
-        uint256 orderEndPeriod = order.startPeriod + order.periods;
-        uint256 storageEndPeriod = _settlePeriod > orderEndPeriod ? orderEndPeriod : _settlePeriod;
-        if (storageEndPeriod <= nodeStartPeriod) return 0;
+        uint256 lastClaim = nodeLastClaimPeriod[_node];
+        uint256 fromPeriod = uint256(nodeStartPeriod) > lastClaim ? uint256(nodeStartPeriod) : lastClaim;
 
-        uint256 storagePeriods = storageEndPeriod - nodeStartPeriod;
-        uint256 totalEarnable = uint256(order.numChunks) * order.price * storagePeriods;
-        uint256 alreadyEarned = nodeOrderEarnings[_orderId][_node];
-        if (totalEarnable <= alreadyEarned) return 0;
+        uint256 orderEndPeriod = uint256(order.startPeriod) + uint256(order.periods);
+        uint256 toPeriod = _settlePeriod > orderEndPeriod ? orderEndPeriod : _settlePeriod;
+        if (toPeriod <= fromPeriod) return 0;
 
-        uint256 newEarnings = totalEarnable - alreadyEarned;
+        uint256 earnablePeriods = toPeriod - fromPeriod;
+        uint256 earnings = uint256(order.numChunks) * _orderPrice(order) * earnablePeriods;
+
         uint256 availableEscrow = order.escrow - orderEscrowWithdrawn[_orderId];
-        return newEarnings > availableEscrow ? availableEscrow : newEarnings;
+        return earnings > availableEscrow ? availableEscrow : earnings;
     }
 
     /// @notice Internal view to check claimable rewards (avoids external self-call in MarketViews)
@@ -84,7 +116,6 @@ abstract contract MarketHelpers is MarketAdmin {
             return 0;
         }
 
-        nodeOrderEarnings[_orderId][_node] += claimableFromOrder;
         orderEscrowWithdrawn[_orderId] += claimableFromOrder;
         aggregateActiveWithdrawn += claimableFromOrder;
         lifetimeRewardsPaid += claimableFromOrder;
@@ -151,25 +182,23 @@ abstract contract MarketHelpers is MarketAdmin {
     // Helper function to remove node from a single order
     function _removeNodeFromOrder(address _node, uint256 _orderId, uint256 _nodeIndex) internal {
         FileOrder storage order = orders[_orderId];
-        address[] storage assignedNodes = orderToNodes[_orderId];
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
         uint256 settlePeriod = currentPeriod();
 
         uint256 settledReward = _settleOrderReward(_node, _orderId, settlePeriod);
         if (settledReward > 0) {
             nodePendingRewards[_node] += settledReward;
         }
-        delete nodeOrderStartTimestamp[_node][_orderId];
-        delete nodeOrderEarnings[_orderId][_node];
 
-        // Remove node from order assignments
-        if (_nodeIndex != assignedNodes.length - 1) {
-            assignedNodes[_nodeIndex] = assignedNodes[assignedNodes.length - 1];
+        // Remove node from order assignments (swap-and-pop)
+        if (_nodeIndex != assignments.length - 1) {
+            assignments[_nodeIndex] = assignments[assignments.length - 1];
         }
-        assignedNodes.pop();
+        assignments.pop();
         order.filled--;
 
         // Last node removed — order no longer challengeable
-        if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
+        if (assignments.length == 0 && isChallengeable[_orderId]) {
             _removeFromChallengeableOrders(_orderId);
         }
 
@@ -189,24 +218,22 @@ abstract contract MarketHelpers is MarketAdmin {
         internal
         returns (uint256 totalSettled, uint256 initialAssignments)
     {
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        initialAssignments = assignedNodes.length;
-        while (assignedNodes.length > 0) {
-            address node = assignedNodes[assignedNodes.length - 1];
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        initialAssignments = assignments.length;
+        while (assignments.length > 0) {
+            address node = assignments[assignments.length - 1].node;
             uint256 settledReward = _settleOrderReward(node, _orderId, _settlePeriod);
             if (settledReward > 0) {
                 nodePendingRewards[node] += settledReward;
                 totalSettled += settledReward;
             }
-            delete nodeOrderStartTimestamp[node][_orderId];
-            delete nodeOrderEarnings[_orderId][node];
 
             (, uint64 capacity, uint64 used,) = nodeStaking.getNodeInfo(node);
             if (capacity > 0) {
                 nodeStaking.updateNodeUsed(node, used - order.numChunks);
             }
 
-            assignedNodes.pop();
+            assignments.pop();
             if (order.filled > 0) {
                 order.filled--;
             }
@@ -319,23 +346,21 @@ abstract contract MarketHelpers is MarketAdmin {
             return 0;
         }
 
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 j = 0; j < assignedNodes.length; j++) {
-            if (assignedNodes[j] == _node) {
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        for (uint256 j = 0; j < assignments.length; j++) {
+            if (assignments[j].node == _node) {
                 uint256 settledReward = _settleOrderReward(_node, _orderId, _settlePeriod);
                 if (settledReward > 0) {
                     nodePendingRewards[_node] += settledReward;
                 }
-                delete nodeOrderStartTimestamp[_node][_orderId];
-                delete nodeOrderEarnings[_orderId][_node];
 
-                if (j != assignedNodes.length - 1) {
-                    assignedNodes[j] = assignedNodes[assignedNodes.length - 1];
+                if (j != assignments.length - 1) {
+                    assignments[j] = assignments[assignments.length - 1];
                 }
-                assignedNodes.pop();
+                assignments.pop();
                 order.filled--;
 
-                if (assignedNodes.length == 0 && isChallengeable[_orderId]) {
+                if (assignments.length == 0 && isChallengeable[_orderId]) {
                     _removeFromChallengeableOrders(_orderId);
                 }
 

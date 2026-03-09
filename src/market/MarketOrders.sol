@@ -7,21 +7,22 @@ import {MarketHelpers} from "./MarketHelpers.sol";
 abstract contract MarketOrders is MarketHelpers {
     // Place a new file storage order with ZK-verified file size
     function placeOrder(
-        FileMeta calldata _file,
+        uint256 _fileRoot,
+        string calldata _fileUri,
         uint32 _numChunks,
         uint16 _periods,
         uint8 _replicas,
         uint256 _pricePerChunkPerPeriod,
         uint256[4] calldata _fspProof
     ) external payable nonReentrant returns (uint256 orderId) {
-        require(_file.root > 0 && _file.root < SNARK_SCALAR_FIELD, "root not in Fr");
+        require(_fileRoot > 0 && _fileRoot < SNARK_SCALAR_FIELD, "root not in Fr");
         require(_numChunks > 0, "invalid size");
         require(_periods > 0, "invalid periods");
         require(_replicas > 0 && _replicas <= MAX_REPLICAS, "invalid replicas");
         require(_pricePerChunkPerPeriod > 0, "invalid price");
 
         // Verify file size proof: proves numChunks is the exact boundary in the SMT
-        uint256[2] memory fspInputs = [_file.root, uint256(_numChunks)];
+        uint256[2] memory fspInputs = [_fileRoot, uint256(_numChunks)];
         fspVerifier.verifyCompressedProof(_fspProof, fspInputs);
 
         uint256 totalCost = uint256(_numChunks) * uint256(_periods) * _pricePerChunkPerPeriod * uint256(_replicas);
@@ -31,15 +32,17 @@ abstract contract MarketOrders is MarketHelpers {
 
         orders[orderId] = FileOrder({
             owner: msg.sender,
-            file: _file,
+            filled: 0,
+            replicas: _replicas,
             numChunks: _numChunks,
             periods: _periods,
-            replicas: _replicas,
-            price: _pricePerChunkPerPeriod,
-            filled: 0,
-            startPeriod: uint64(currentPeriod()),
+            startPeriod: uint32(currentPeriod()),
+            fileRoot: _fileRoot,
             escrow: totalCost
         });
+
+        // Store URI separately (written once, read rarely)
+        orderUri[orderId] = _fileUri;
 
         // Add to active orders for random selection
         activeOrders.push(orderId);
@@ -69,9 +72,9 @@ abstract contract MarketOrders is MarketHelpers {
         require(nodeStaking.hasCapacity(msg.sender, order.numChunks), "insufficient capacity");
 
         // Check if node is already assigned to this order
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            require(assignedNodes[i] != msg.sender, "already assigned to this order");
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        for (uint256 i = 0; i < assignments.length; i++) {
+            require(assignments[i].node != msg.sender, "already assigned to this order");
         }
 
         // Enforce per-node order cap to bound forced-exit iteration
@@ -80,12 +83,13 @@ abstract contract MarketOrders is MarketHelpers {
         // Verify PoI proof — node must prove data possession before claiming slot
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
-        uint256 randomness = uint256(keccak256(abi.encodePacked(order.file.root, publicKey))) % SNARK_SCALAR_FIELD;
-        uint256[5] memory publicInputs = [uint256(_commitment), randomness, publicKey, order.file.root, uint256(order.numChunks)];
+        uint256 randomness = uint256(keccak256(abi.encodePacked(order.fileRoot, publicKey))) % SNARK_SCALAR_FIELD;
+        uint256[5] memory publicInputs =
+            [uint256(_commitment), randomness, publicKey, order.fileRoot, uint256(order.numChunks)];
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
-        // Assign node to order
-        assignedNodes.push(msg.sender);
+        // Assign node to order with packed start period
+        assignments.push(NodeAssignment({node: msg.sender, startPeriod: uint32(currentPeriod())}));
         nodeToOrders[msg.sender].push(_orderId);
         order.filled++;
 
@@ -93,9 +97,6 @@ abstract contract MarketOrders is MarketHelpers {
         if (order.filled == 1) {
             _addToChallengeableOrders(_orderId);
         }
-
-        // Record when this node started storing this order (timestamp, not period)
-        nodeOrderStartTimestamp[msg.sender][_orderId] = block.timestamp;
 
         // Update node's used capacity
         (,, uint64 used,) = nodeStaking.getNodeInfo(msg.sender);
@@ -154,9 +155,14 @@ abstract contract MarketOrders is MarketHelpers {
         }
     }
 
-    // Get nodes assigned to an order
+    // Get nodes assigned to an order (extracts addresses from packed assignments)
     function getOrderNodes(uint256 _orderId) external view returns (address[] memory) {
-        return orderToNodes[_orderId];
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        address[] memory nodes = new address[](assignments.length);
+        for (uint256 i = 0; i < assignments.length; i++) {
+            nodes[i] = assignments[i].node;
+        }
+        return nodes;
     }
 
     // Get orders assigned to a node
@@ -171,7 +177,7 @@ abstract contract MarketOrders is MarketHelpers {
         require(currentPeriod() >= uint256(order.startPeriod) + uint256(order.periods), "order not expired");
         require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
-        uint256 settlePeriod = order.startPeriod + order.periods;
+        uint256 settlePeriod = uint256(order.startPeriod) + uint256(order.periods);
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         // Remove from active orders and clean up
@@ -186,7 +192,8 @@ abstract contract MarketOrders is MarketHelpers {
         aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
-        delete orderToNodes[_orderId];
+        delete orderAssignments[_orderId];
+        delete orderUri[_orderId];
 
         // Queue remaining escrow as pull-refund
         if (refundAmount > 0) {
@@ -205,18 +212,15 @@ abstract contract MarketOrders is MarketHelpers {
         require(!_isOrderUnderActiveChallenge(_orderId), "order under active challenge");
 
         // Snapshot assigned nodes before settlement empties the array
-        address[] memory assignedNodes = orderToNodes[_orderId];
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
 
         // Identify nodes eligible for cancellation penalty (served >= 1 full period).
         uint256 settlePeriod = currentPeriod();
         uint256 eligibleCount = 0;
-        address[] memory eligibleNodes = new address[](assignedNodes.length);
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            uint256 startTs = nodeOrderStartTimestamp[assignedNodes[i]][_orderId];
-            uint256 elapsed = startTs - genesisTs;
-            uint256 nodeStartPeriod = (elapsed + PERIOD - 1) / PERIOD;
-            if (settlePeriod > nodeStartPeriod) {
-                eligibleNodes[eligibleCount] = assignedNodes[i];
+        address[] memory eligibleNodes = new address[](assignments.length);
+        for (uint256 i = 0; i < assignments.length; i++) {
+            if (settlePeriod > uint256(assignments[i].startPeriod)) {
+                eligibleNodes[eligibleCount] = assignments[i].node;
                 eligibleCount++;
             }
         }
@@ -230,9 +234,9 @@ abstract contract MarketOrders is MarketHelpers {
         uint256 refundAmount = remainingEscrow;
         if (eligibleCount > 0 && remainingEscrow > 0) {
             // Scaled cancellation penalty: 25% at start → 5% near end
-            uint256 elapsedPeriods = settlePeriod - order.startPeriod;
+            uint256 elapsedPeriods = settlePeriod - uint256(order.startPeriod);
             uint256 penaltyRange = CANCEL_PENALTY_MAX_BPS - CANCEL_PENALTY_MIN_BPS; // 2000
-            uint256 penaltyBps = CANCEL_PENALTY_MAX_BPS - (penaltyRange * elapsedPeriods / order.periods);
+            uint256 penaltyBps = CANCEL_PENALTY_MAX_BPS - (penaltyRange * elapsedPeriods / uint256(order.periods));
             uint256 penalty = remainingEscrow * penaltyBps / 10000;
             refundAmount -= penalty;
 
@@ -250,7 +254,8 @@ abstract contract MarketOrders is MarketHelpers {
         aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
-        delete orderToNodes[_orderId];
+        delete orderAssignments[_orderId];
+        delete orderUri[_orderId];
 
         // Queue refund as pull-payment
         if (refundAmount > 0) {
@@ -269,20 +274,11 @@ abstract contract MarketOrders is MarketHelpers {
         require(!_isUnresolvedProver(msg.sender), "active prover cannot quit");
 
         // Verify node is assigned to this order
-        address[] storage assignedNodes = orderToNodes[_orderId];
-        bool found = false;
-        uint256 nodeIndex;
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            if (assignedNodes[i] == msg.sender) {
-                found = true;
-                nodeIndex = i;
-                break;
-            }
-        }
+        (uint256 nodeIndex, bool found) = _getNodeAssignmentIndex(_orderId, msg.sender);
         require(found, "node not assigned to this order");
 
         // Calculate slash amount using scaled quit penalty formula
-        uint256 remainingPeriods = (order.startPeriod + order.periods) - currentPeriod();
+        uint256 remainingPeriods = (uint256(order.startPeriod) + uint256(order.periods)) - currentPeriod();
         uint256 slashPeriods;
         if (remainingPeriods <= QUIT_SLASH_BASE_PERIODS) {
             slashPeriods = remainingPeriods; // full remaining if short
@@ -290,7 +286,7 @@ abstract contract MarketOrders is MarketHelpers {
             slashPeriods =
                 QUIT_SLASH_BASE_PERIODS + (remainingPeriods - QUIT_SLASH_BASE_PERIODS) / QUIT_SLASH_EXCESS_DIVISOR;
         }
-        uint256 slashAmount = uint256(order.numChunks) * order.price * slashPeriods;
+        uint256 slashAmount = uint256(order.numChunks) * _orderPrice(order) * slashPeriods;
 
         // Cap to available stake to prevent revert.
         (uint256 nodeStake,, uint64 usedBeforeQuit,) = nodeStaking.getNodeInfo(msg.sender);

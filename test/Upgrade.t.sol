@@ -6,7 +6,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
-import {MarketStorage} from "../src/market/MarketStorage.sol";
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
 import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
 import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
@@ -87,10 +86,9 @@ contract UpgradeTest is Test {
         returns (uint256 orderId, uint256 totalCost)
     {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
-        MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
         uint256[4] memory fspProof;
         vm.prank(owner_);
-        orderId = market.placeOrder{value: totalCost}(meta, numChunks, periods, replicas, price, fspProof);
+        orderId = market.placeOrder{value: totalCost}(FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, fspProof);
     }
 
     function _executeOrder(address node, uint256 orderId) internal {
@@ -170,12 +168,12 @@ contract UpgradeTest is Test {
         address preKeyleakVerifier = address(market.keyleakVerifier());
         address preNodeStaking = address(market.nodeStaking());
         (
-            address orderOwner,,
-            uint32 numChunks,
-            uint16 periods,
+            address orderOwner,
+            uint8 filled,
             uint8 replicas,
-            uint256 price,
-            uint8 filled,,
+            uint32 numChunks,
+            uint16 periods,,
+            uint256 fileRoot,
             uint256 escrow
         ) = market.orders(orderId);
 
@@ -195,19 +193,19 @@ contract UpgradeTest is Test {
 
         // Verify order details preserved
         (
-            address postOrderOwner,,
-            uint32 postNumChunks,
-            uint16 postPeriods,
+            address postOrderOwner,
+            uint8 postFilled,
             uint8 postReplicas,
-            uint256 postPrice,
-            uint8 postFilled,,
+            uint32 postNumChunks,
+            uint16 postPeriods,,
+            uint256 postFileRoot,
             uint256 postEscrow
         ) = market.orders(orderId);
         assertEq(postOrderOwner, orderOwner, "order owner changed");
         assertEq(postNumChunks, numChunks, "numChunks changed");
         assertEq(postPeriods, periods, "periods changed");
         assertEq(postReplicas, replicas, "replicas changed");
-        assertEq(postPrice, price, "price changed");
+        assertEq(postFileRoot, fileRoot, "fileRoot changed");
         assertEq(postFilled, filled, "filled changed");
         assertEq(postEscrow, escrow, "escrow changed");
     }
@@ -393,7 +391,7 @@ contract UpgradeTest is Test {
         assertEq(marketV2.nextOrderId(), preNextOrderId, "nextOrderId changed");
 
         // Existing order data intact
-        (address orderOwner,,,,,,,, uint256 escrow) = marketV2.orders(orderId);
+        (address orderOwner,,,,,,, uint256 escrow) = marketV2.orders(orderId);
         assertEq(orderOwner, user1, "order owner changed");
         assertGt(escrow, 0, "escrow zeroed");
     }

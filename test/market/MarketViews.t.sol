@@ -100,7 +100,7 @@ contract MarketViewsTest is MarketTestBase {
 
         _executeOrder(node1, orderId);
 
-        (, uint256 withdrawn, uint64 startPeriod, bool expired, address[] memory nodes) =
+        (, uint256 withdrawn, uint32 startPeriod, bool expired, address[] memory nodes) =
             marketExt.getOrderFinancials(orderId);
 
         assertEq(withdrawn, 0);

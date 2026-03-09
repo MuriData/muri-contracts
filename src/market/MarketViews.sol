@@ -77,9 +77,27 @@ abstract contract MarketViews is MarketChallenge {
         remainingEscrow = totalEscrow > paidToNodes ? totalEscrow - paidToNodes : 0;
     }
 
-    /// @notice Get node's earnings from a specific order
+    /// @notice Get node's earnings from a specific order (computed on-the-fly from assignment and watermark)
     function getNodeOrderEarnings(address _node, uint256 _orderId) external view returns (uint256) {
-        return nodeOrderEarnings[_orderId][_node];
+        FileOrder storage order = orders[_orderId];
+        if (order.owner == address(0)) return 0;
+
+        (uint32 nodeStartPeriod, bool found) = _getNodeStartPeriod(_orderId, _node);
+        if (!found) return 0;
+
+        uint256 endPeriod = uint256(order.startPeriod) + uint256(order.periods);
+        uint256 currentPer = currentPeriod();
+        uint256 toPeriod = currentPer > endPeriod ? endPeriod : currentPer;
+        if (toPeriod <= uint256(nodeStartPeriod)) return 0;
+
+        return uint256(order.numChunks) * _orderPrice(order) * (toPeriod - uint256(nodeStartPeriod));
+    }
+
+    /// @notice Get the per-chunk-per-period price for an order (derived from escrow)
+    function getOrderPrice(uint256 _orderId) external view returns (uint256) {
+        FileOrder storage order = orders[_orderId];
+        require(order.owner != address(0), "order does not exist");
+        return _orderPrice(order);
     }
 
     // =============================================================================
@@ -176,7 +194,7 @@ abstract contract MarketViews is MarketChallenge {
             escrows[idx] = order.escrow;
 
             if (order.owner != address(0)) {
-                uint256 endPeriod = order.startPeriod + order.periods;
+                uint256 endPeriod = uint256(order.startPeriod) + uint256(order.periods);
                 isActive[idx] = currentPer < endPeriod;
             }
         }
@@ -253,8 +271,8 @@ abstract contract MarketViews is MarketChallenge {
         require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
         FileOrder storage order = orders[_orderId];
         owner_ = order.owner;
-        uri_ = order.file.uri;
-        root_ = order.file.root;
+        uri_ = orderUri[_orderId];
+        root_ = order.fileRoot;
         numChunks_ = order.numChunks;
         periods_ = order.periods;
         replicas_ = order.replicas;
@@ -265,7 +283,7 @@ abstract contract MarketViews is MarketChallenge {
     function getOrderFinancials(uint256 _orderId)
         external
         view
-        returns (uint256 escrow_, uint256 withdrawn_, uint64 startPeriod_, bool expired_, address[] memory nodes_)
+        returns (uint256 escrow_, uint256 withdrawn_, uint32 startPeriod_, bool expired_, address[] memory nodes_)
     {
         require(_orderId > 0 && _orderId < nextOrderId, "invalid order id");
         FileOrder storage order = orders[_orderId];
@@ -273,6 +291,11 @@ abstract contract MarketViews is MarketChallenge {
         withdrawn_ = orderEscrowWithdrawn[_orderId];
         startPeriod_ = order.startPeriod;
         expired_ = isOrderExpired(_orderId);
-        nodes_ = orderToNodes[_orderId];
+
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
+        nodes_ = new address[](assignments.length);
+        for (uint256 i = 0; i < assignments.length; i++) {
+            nodes_[i] = assignments[i].node;
+        }
     }
 }

@@ -2,8 +2,6 @@
 pragma solidity ^0.8.13;
 
 import {MarketTestBase} from "./MarketBase.t.sol";
-import {MarketStorage} from "../../src/market/MarketStorage.sol";
-
 /// @notice Tests for the economic redesign (Changes 1-6)
 contract MarketEconomicsTest is MarketTestBase {
     // =========================================================================
@@ -15,10 +13,10 @@ contract MarketEconomicsTest is MarketTestBase {
     }
 
     function test_SlashMultiplier_AppliedToProportionalSlash() public {
-        // Order where scaledSlash > floor: 10000 chunks at 1e13 price
-        // orderPeriodCost = 10000 * 1e13 = 1e17
-        // scaledSlash = 1e17 * 3 = 3e17 > floor (1.5e17)
-        uint32 size = 10000;
+        // Order where scaledSlash > floor: 30000 chunks at 1e13 price
+        // orderPeriodCost = 30000 * 1e13 = 3e17
+        // scaledSlash = 3e17 * 3 = 9e17 > floor (1500 * 4e14 = 6e17)
+        uint32 size = 30000;
         uint256 price = 1e13;
         uint64 nodeCapacity = 100000;
         uint256 scaledSlash = uint256(size) * price * 3;
@@ -681,16 +679,15 @@ contract MarketEconomicsTest is MarketTestBase {
         uint16 periods = 20;
         uint256 highPrice = STAKE_PER_CHUNK; // 4e14 per chunk per period
 
-        MarketStorage.FileMeta memory fileMeta = _fileMeta();
         uint256 cost1 = uint256(200) * uint256(periods) * 1e12;
         vm.prank(user1);
-        uint256 orderId1 = market.placeOrder{value: cost1}(fileMeta, 200, periods, 1, 1e12, _emptyFspProof());
+        uint256 orderId1 = market.placeOrder{value: cost1}(FILE_ROOT, FILE_URI, 200, periods, 1, 1e12, _emptyFspProof());
 
         uint256 cost2 = uint256(maxSize) * uint256(periods) * highPrice;
         vm.deal(user1, user1.balance + cost2);
         vm.prank(user1);
         uint256 orderId2 =
-            market.placeOrder{value: cost2}(fileMeta, uint32(maxSize), periods, 1, highPrice, _emptyFspProof());
+            market.placeOrder{value: cost2}(FILE_ROOT, FILE_URI, uint32(maxSize), periods, 1, highPrice, _emptyFspProof());
 
         _executeOrder(node1, orderId1);
         _executeOrder(node1, orderId2);

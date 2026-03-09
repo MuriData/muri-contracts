@@ -6,7 +6,6 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../../src/Market.sol";
 import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
-import {MarketStorage} from "../../src/market/MarketStorage.sol";
 import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
 import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
 import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
@@ -79,10 +78,6 @@ abstract contract MarketTestBase is Test {
         vm.deal(node3, 100 ether);
     }
 
-    function _fileMeta() internal pure returns (MarketStorage.FileMeta memory) {
-        return MarketStorage.FileMeta({root: FILE_ROOT, uri: FILE_URI});
-    }
-
     function _stakeNode(address node, uint64 capacity, uint256 key) internal {
         uint256 stake = uint256(capacity) * STAKE_PER_CHUNK;
         vm.deal(node, node.balance + stake);
@@ -114,7 +109,7 @@ abstract contract MarketTestBase is Test {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         vm.prank(owner_);
         orderId =
-            market.placeOrder{value: totalCost}(_fileMeta(), numChunks, periods, replicas, price, _emptyFspProof());
+            market.placeOrder{value: totalCost}(FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, _emptyFspProof());
     }
 
     function _placeDefaultOrder(address owner_, uint8 replicas) internal returns (uint256 orderId, uint256 totalCost) {
@@ -149,9 +144,8 @@ contract BaseRevertingReceiver {
         external
     {
         uint256 totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
-        MarketStorage.FileMeta memory meta = MarketStorage.FileMeta({root: 0x123, uri: "test"});
         uint256[4] memory fspProof;
-        market.placeOrder{value: totalCost + overpay}(meta, numChunks, periods, replicas, price, fspProof);
+        market.placeOrder{value: totalCost + overpay}(0x123, "test", numChunks, periods, replicas, price, fspProof);
     }
 
     receive() external payable {

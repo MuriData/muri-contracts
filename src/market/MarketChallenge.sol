@@ -30,13 +30,14 @@ abstract contract MarketChallenge is MarketHelpers {
 
         // Phase 3: verify ZK proof
         FileOrder storage order = orders[slotOrderId];
-        uint256 fileRootHash = order.file.root;
+        uint256 fileRootHash = order.fileRoot;
 
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
 
         uint256 slotRandomness = slot.randomness;
-        uint256[5] memory publicInputs = [uint256(_commitment), slotRandomness, publicKey, fileRootHash, uint256(order.numChunks)];
+        uint256[5] memory publicInputs =
+            [uint256(_commitment), slotRandomness, publicKey, fileRootHash, uint256(order.numChunks)];
 
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
@@ -185,10 +186,10 @@ abstract contract MarketChallenge is MarketHelpers {
         require(!isOrderExpired(_orderId), "order expired");
 
         // Verify node is assigned to this order
-        address[] storage assignedNodes = orderToNodes[_orderId];
+        NodeAssignment[] storage assignments = orderAssignments[_orderId];
         bool found = false;
-        for (uint256 i = 0; i < assignedNodes.length; i++) {
-            if (assignedNodes[i] == _node) {
+        for (uint256 i = 0; i < assignments.length; i++) {
+            if (assignments[i].node == _node) {
                 found = true;
                 break;
             }
@@ -212,7 +213,7 @@ abstract contract MarketChallenge is MarketHelpers {
         challenge.deadlineBlock = deadline;
         challenge.randomness = randomness;
         challenge.challenger = msg.sender;
-        challenge.fileRoot = order.file.root;
+        challenge.fileRoot = order.fileRoot;
         challenge.numChunks = order.numChunks;
 
         emit OnDemandChallengeIssued(_orderId, _node, msg.sender, deadline);
@@ -233,7 +234,8 @@ abstract contract MarketChallenge is MarketHelpers {
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
 
-        uint256[5] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot, uint256(challenge.numChunks)];
+        uint256[5] memory publicInputs =
+            [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot, uint256(challenge.numChunks)];
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement
@@ -268,7 +270,7 @@ abstract contract MarketChallenge is MarketHelpers {
         }
 
         // Apply same slash formula as slot-based challenges
-        uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
+        uint256 scaledSlash = uint256(order.numChunks) * _orderPrice(order) * proofFailureSlashMultiplier;
         uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
 
         if (nodeStaking.isValidNode(_node)) {
@@ -334,10 +336,10 @@ abstract contract MarketChallenge is MarketHelpers {
             }
 
             // Found a valid order — select a node preferring unchallenged ones
-            address[] storage nodes = orderToNodes[candidateOrderId];
-            if (nodes.length == 0) continue;
+            NodeAssignment[] storage assignments_ = orderAssignments[candidateOrderId];
+            if (assignments_.length == 0) continue;
 
-            address selectedNode = _selectUnchallengedNode(nodes, _randomness, candidateOrderId, nonce);
+            address selectedNode = _selectUnchallengedNode(assignments_, _randomness, candidateOrderId, nonce);
 
             // Ideal: fully fresh pair — commit immediately
             if (orderActiveChallengeCount[candidateOrderId] == 0 && nodeActiveChallengeCount[selectedNode] == 0) {
@@ -369,19 +371,20 @@ abstract contract MarketChallenge is MarketHelpers {
         return false;
     }
 
-    /// @notice Select a node from an order's node list, preferring nodes not already under challenge.
+    /// @notice Select a node from an order's assignment list, preferring nodes not already under challenge.
     /// @dev Bounded by MAX_REPLICAS (10) — at most 1 + 10 SLOADs for the linear scan.
-    function _selectUnchallengedNode(address[] storage _nodes, uint256 _randomness, uint256 _orderId, uint256 _nonce)
-        internal
-        view
-        returns (address)
-    {
-        uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _nodes.length;
-        address candidate = _nodes[idx];
+    function _selectUnchallengedNode(
+        NodeAssignment[] storage _assignments,
+        uint256 _randomness,
+        uint256 _orderId,
+        uint256 _nonce
+    ) internal view returns (address) {
+        uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _assignments.length;
+        address candidate = _assignments[idx].node;
         if (nodeActiveChallengeCount[candidate] == 0) return candidate;
         // Linear scan for an unchallenged node (bounded by MAX_REPLICAS = 10)
-        for (uint256 i = 0; i < _nodes.length; i++) {
-            if (nodeActiveChallengeCount[_nodes[i]] == 0) return _nodes[i];
+        for (uint256 i = 0; i < _assignments.length; i++) {
+            if (nodeActiveChallengeCount[_assignments[i].node] == 0) return _assignments[i].node;
         }
         return candidate; // all challenged — fall back to random pick
     }
@@ -447,7 +450,7 @@ abstract contract MarketChallenge is MarketHelpers {
                 // Slash the failed node — proportional to order value * multiplier, floored at MIN_PROOF_FAILURE_SLASH
                 uint256 slotOrderId_ = slot.orderId;
                 FileOrder storage order = orders[slotOrderId_];
-                uint256 scaledSlash = uint256(order.numChunks) * order.price * proofFailureSlashMultiplier;
+                uint256 scaledSlash = uint256(order.numChunks) * _orderPrice(order) * proofFailureSlashMultiplier;
                 uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
 
                 if (nodeStaking.isValidNode(failedNode)) {
@@ -550,7 +553,7 @@ abstract contract MarketChallenge is MarketHelpers {
         if (order.owner == address(0)) return;
         if (_isOrderUnderActiveChallenge(_orderId)) return;
 
-        uint256 settlePeriod = order.startPeriod + order.periods;
+        uint256 settlePeriod = uint256(order.startPeriod) + uint256(order.periods);
         _settleAndReleaseNodes(order, _orderId, settlePeriod);
 
         _removeFromActiveOrders(_orderId);
@@ -563,7 +566,8 @@ abstract contract MarketChallenge is MarketHelpers {
         aggregateActiveWithdrawn -= withdrawn;
 
         delete orders[_orderId];
-        delete orderToNodes[_orderId];
+        delete orderAssignments[_orderId];
+        delete orderUri[_orderId];
 
         if (refundAmount > 0) {
             pendingRefunds[orderOwner] += refundAmount;
