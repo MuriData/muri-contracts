@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {MarketTestBase} from "./MarketBase.t.sol";
+import {IPlonkPrecompile} from "../../src/interfaces/IPlonkPrecompile.sol";
 
 contract MarketKeyLeakTest is MarketTestBase {
     // Deterministic fixture values from `go run ./cmd/export keyleak` (sk=12345, reporter=0xDEAD)
@@ -82,14 +83,16 @@ contract MarketKeyLeakTest is MarketTestBase {
         _stakeNodeWithLeakedKey(node1);
         vm.deal(KL_REPORTER, 1 ether);
 
-        // Corrupt the proof by flipping some bytes
-        bytes memory badProof = KL_PROOF;
-        badProof[0] = bytes1(uint8(badProof[0]) ^ 0xFF);
-        badProof[1] = bytes1(uint8(badProof[1]) ^ 0xFF);
+        // Mock PLONK precompile to reject (simulates invalid proof)
+        vm.mockCall(
+            PLONK_PRECOMPILE,
+            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
+            abi.encode(false)
+        );
 
         vm.prank(KL_REPORTER);
         vm.expectRevert();
-        marketExt.reportKeyLeak(node1, badProof);
+        marketExt.reportKeyLeak(node1, KL_PROOF);
     }
 
     function test_ReportKeyLeak_RevertNotANode() public {
@@ -102,6 +105,13 @@ contract MarketKeyLeakTest is MarketTestBase {
 
     function test_ReportKeyLeak_RevertWrongReporter() public {
         _stakeNodeWithLeakedKey(node1);
+
+        // Mock PLONK precompile to reject (wrong reporter → wrong public inputs → proof invalid)
+        vm.mockCall(
+            PLONK_PRECOMPILE,
+            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
+            abi.encode(false)
+        );
 
         // Call from user1 instead of KL_REPORTER — proof was generated for 0xDEAD
         vm.prank(user1);

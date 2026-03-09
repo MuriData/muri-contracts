@@ -6,9 +6,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
-import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
-import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
-import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
+import {IGroth16Precompile} from "../src/interfaces/IGroth16Precompile.sol";
+import {IPlonkPrecompile} from "../src/interfaces/IPlonkPrecompile.sol";
 
 contract MarketTest is Test {
     // Re-declare events for vm.expectEmit
@@ -30,16 +29,15 @@ contract MarketTest is Test {
     uint256 public constant PERIOD = 7 days;
     uint256 public constant CHALLENGE_WINDOW_BLOCKS = 50;
 
+    // Precompile addresses
+    address public constant GROTH16_PRECOMPILE = 0x0300000000000000000000000000000000000001;
+    address public constant PLONK_PRECOMPILE = 0x0300000000000000000000000000000000000004;
+
     // Test file metadata
     uint256 public constant FILE_ROOT = 0x123456789abcdef;
     string public constant FILE_URI = "QmTestHash123";
 
     function setUp() public {
-        // Deploy verifiers
-        Verifier poiVerifier = new Verifier();
-        FspVerifier fspVerifier = new FspVerifier();
-        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
-
         // Deploy NodeStaking impl + proxy (uninitialized)
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
@@ -51,7 +49,7 @@ contract MarketTest is Test {
         FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
-            (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
+            (address(this), address(stakingProxy))
         );
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
@@ -62,16 +60,18 @@ contract MarketTest is Test {
         marketExt = FileMarketExtension(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
-        // Mock FSP verifier to always succeed so tests don't need valid proofs
+        // Mock Groth16 precompile to always return true (PoI + FSP proofs)
         vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
-            abi.encode()
+            GROTH16_PRECOMPILE,
+            abi.encodeWithSelector(IGroth16Precompile.verifyCompressedProof.selector),
+            abi.encode(true)
         );
 
-        // Mock PoI verifier to always succeed so tests don't need valid proofs
+        // Mock PLONK precompile to always return true (KeyLeak proofs)
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
+            PLONK_PRECOMPILE,
+            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
+            abi.encode(true)
         );
 
         // Fund test accounts
@@ -1812,17 +1812,11 @@ contract MarketTest is Test {
     uint256 constant SLOT_NODE_ACTIVE_CHALLENGE_COUNT = 47;
     uint256 constant SLOT_ORDER_ACTIVE_CHALLENGE_COUNT = 48;
 
-    function _zkProof() internal view returns (uint256[4] memory proof) {
-        uint256[8] memory rawProof;
-        rawProof[0] = ZK_PROOF_0;
-        rawProof[1] = ZK_PROOF_1;
-        rawProof[2] = ZK_PROOF_2;
-        rawProof[3] = ZK_PROOF_3;
-        rawProof[4] = ZK_PROOF_4;
-        rawProof[5] = ZK_PROOF_5;
-        rawProof[6] = ZK_PROOF_6;
-        rawProof[7] = ZK_PROOF_7;
-        proof = Verifier(address(market.poiVerifier())).compressProof(rawProof);
+    function _zkProof() internal pure returns (uint256[4] memory proof) {
+        proof[0] = ZK_PROOF_0;
+        proof[1] = ZK_PROOF_1;
+        proof[2] = ZK_PROOF_2;
+        proof[3] = ZK_PROOF_3;
     }
 
     /// @dev Set up a challenge slot where `prover` is the challenged node for `orderId`,

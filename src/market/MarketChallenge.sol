@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {MarketHelpers} from "./MarketHelpers.sol";
+import {PrecompileVerifiers} from "../verifiers/PrecompileVerifiers.sol";
 
 /// @notice Event-driven parallel challenge slots for Avalanche C-Chain.
 /// N independent challenge slots run in parallel. Each slot challenges one node
@@ -39,7 +40,7 @@ abstract contract MarketChallenge is MarketHelpers {
         uint256[5] memory publicInputs =
             [uint256(_commitment), slotRandomness, publicKey, fileRootHash, uint256(order.numChunks)];
 
-        poiVerifier.verifyCompressedProof(_proof, publicInputs);
+        PrecompileVerifiers.verifyPoiProof(_proof, publicInputs);
 
         emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
@@ -161,7 +162,7 @@ abstract contract MarketChallenge is MarketHelpers {
         uint256[] memory publicInputs = new uint256[](2);
         publicInputs[0] = publicKey;
         publicInputs[1] = uint256(uint160(msg.sender));
-        require(keyleakVerifier.Verify(_proof, publicInputs), "invalid keyleak proof");
+        PrecompileVerifiers.verifyKeyLeakProof(_proof, publicInputs);
 
         // Slash full stake — compromised key means node can no longer prove data integrity
         (bool forcedExit, uint256 totalSlashed) = nodeStaking.slashNode(_node, nodeStake);
@@ -236,7 +237,7 @@ abstract contract MarketChallenge is MarketHelpers {
 
         uint256[5] memory publicInputs =
             [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot, uint256(challenge.numChunks)];
-        poiVerifier.verifyCompressedProof(_proof, publicInputs);
+        PrecompileVerifiers.verifyPoiProof(_proof, publicInputs);
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement
         challenge.randomness = 0;

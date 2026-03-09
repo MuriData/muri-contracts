@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {MarketHelpers} from "./MarketHelpers.sol";
+import {PrecompileVerifiers} from "../verifiers/PrecompileVerifiers.sol";
 
 /// @notice Order lifecycle, assignment, settlement, and slashing mechanics.
 abstract contract MarketOrders is MarketHelpers {
@@ -23,7 +24,7 @@ abstract contract MarketOrders is MarketHelpers {
 
         // Verify file size proof: proves numChunks is the exact boundary in the SMT
         uint256[2] memory fspInputs = [_fileRoot, uint256(_numChunks)];
-        fspVerifier.verifyCompressedProof(_fspProof, fspInputs);
+        PrecompileVerifiers.verifyFspProof(_fspProof, fspInputs);
 
         uint256 totalCost = uint256(_numChunks) * uint256(_periods) * _pricePerChunkPerPeriod * uint256(_replicas);
         require(msg.value >= totalCost, "insufficient payment");
@@ -86,7 +87,7 @@ abstract contract MarketOrders is MarketHelpers {
         uint256 randomness = uint256(keccak256(abi.encodePacked(order.fileRoot, publicKey))) % SNARK_SCALAR_FIELD;
         uint256[5] memory publicInputs =
             [uint256(_commitment), randomness, publicKey, order.fileRoot, uint256(order.numChunks)];
-        poiVerifier.verifyCompressedProof(_proof, publicInputs);
+        PrecompileVerifiers.verifyPoiProof(_proof, publicInputs);
 
         // Assign node to order with packed start period
         assignments.push(NodeAssignment({node: msg.sender, startPeriod: uint32(currentPeriod())}));

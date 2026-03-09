@@ -6,9 +6,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
-import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
-import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
-import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
+import {IGroth16Precompile} from "../src/interfaces/IGroth16Precompile.sol";
+import {IPlonkPrecompile} from "../src/interfaces/IPlonkPrecompile.sol";
 import {FileMarketV2} from "./mocks/FileMarketV2.sol";
 import {NodeStakingV2} from "./mocks/NodeStakingV2.sol";
 
@@ -32,11 +31,11 @@ contract UpgradeTest is Test {
     uint256 internal constant FILE_ROOT = 0x123456789abcdef;
     string internal constant FILE_URI = "QmTestHash123";
 
-    function setUp() public {
-        Verifier poiVerifier = new Verifier();
-        FspVerifier fspVerifier = new FspVerifier();
-        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
+    // Precompile addresses
+    address internal constant GROTH16_PRECOMPILE = 0x0300000000000000000000000000000000000001;
+    address internal constant PLONK_PRECOMPILE = 0x0300000000000000000000000000000000000004;
 
+    function setUp() public {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
@@ -44,7 +43,7 @@ contract UpgradeTest is Test {
         FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
-            (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
+            (address(this), address(stakingProxy))
         );
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
@@ -54,14 +53,16 @@ contract UpgradeTest is Test {
         marketExt = FileMarketExtension(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
-        // Mock verifiers to always succeed
+        // Mock precompiles to always succeed
         vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
-            abi.encode()
+            GROTH16_PRECOMPILE,
+            abi.encodeWithSelector(IGroth16Precompile.verifyCompressedProof.selector),
+            abi.encode(true)
         );
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
+            PLONK_PRECOMPILE,
+            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
+            abi.encode(true)
         );
 
         vm.deal(user1, 100 ether);
@@ -163,9 +164,6 @@ contract UpgradeTest is Test {
         address preOwner = market.owner();
         uint256 preGenesisTs = market.genesisTs();
         uint256 preNextOrderId = market.nextOrderId();
-        address prePoiVerifier = address(market.poiVerifier());
-        address preFspVerifier = address(market.fspVerifier());
-        address preKeyleakVerifier = address(market.keyleakVerifier());
         address preNodeStaking = address(market.nodeStaking());
         (
             address orderOwner,
@@ -186,9 +184,6 @@ contract UpgradeTest is Test {
         assertEq(market.owner(), preOwner, "owner changed");
         assertEq(market.genesisTs(), preGenesisTs, "genesisTs changed");
         assertEq(market.nextOrderId(), preNextOrderId, "nextOrderId changed");
-        assertEq(address(market.poiVerifier()), prePoiVerifier, "poiVerifier changed");
-        assertEq(address(market.fspVerifier()), preFspVerifier, "fspVerifier changed");
-        assertEq(address(market.keyleakVerifier()), preKeyleakVerifier, "keyleakVerifier changed");
         assertEq(address(market.nodeStaking()), preNodeStaking, "nodeStaking changed");
 
         // Verify order details preserved
@@ -267,35 +262,7 @@ contract UpgradeTest is Test {
         market.upgradeToAndCall(address(newImpl), "");
 
         vm.expectRevert();
-        market.initialize(address(this), address(nodeStaking), address(0x1), address(0x2), address(0x3));
-    }
-
-    // ---------------------------------------------------------------
-    // Verifier swap test
-    // ---------------------------------------------------------------
-
-    function test_UpgradeWithNewVerifiers() public {
-        // Deploy new verifiers
-        Verifier newPoiVerifier = new Verifier();
-        FspVerifier newFspVerifier = new FspVerifier();
-        KeyLeakVerifier newKeyleakVerifier = new KeyLeakVerifier();
-
-        // Verify they differ from current
-        assertNotEq(address(newPoiVerifier), address(market.poiVerifier()));
-
-        FileMarketExtension newExt = new FileMarketExtension();
-        FileMarketV2 newImpl = new FileMarketV2(address(newExt));
-        bytes memory reinitData = abi.encodeCall(
-            FileMarketV2.initializeV2WithVerifiers,
-            (42, address(newPoiVerifier), address(newFspVerifier), address(newKeyleakVerifier))
-        );
-        market.upgradeToAndCall(address(newImpl), reinitData);
-
-        FileMarketV2 marketV2 = FileMarketV2(payable(address(market)));
-        assertEq(address(marketV2.poiVerifier()), address(newPoiVerifier), "poiVerifier not updated");
-        assertEq(address(marketV2.fspVerifier()), address(newFspVerifier), "fspVerifier not updated");
-        assertEq(address(marketV2.keyleakVerifier()), address(newKeyleakVerifier), "keyleakVerifier not updated");
-        assertEq(marketV2.v2ExampleParam(), 42, "v2ExampleParam not set");
+        market.initialize(address(this), address(nodeStaking));
     }
 
     // ---------------------------------------------------------------
@@ -316,15 +283,7 @@ contract UpgradeTest is Test {
         NodeStakingV2 newStakingImpl = new NodeStakingV2();
         nodeStaking.upgradeToAndCall(address(newStakingImpl), "");
 
-        // Mock verifiers on the (possibly new) verifier addresses
-        vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
-        );
+        // Precompile mocks from setUp() still apply — no extra mocking needed.
 
         // --- Verify core operations still work post-upgrade ---
 

@@ -6,9 +6,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../../src/Market.sol";
 import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
-import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
-import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
-import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
+import {IGroth16Precompile} from "../../src/interfaces/IGroth16Precompile.sol";
+import {IPlonkPrecompile} from "../../src/interfaces/IPlonkPrecompile.sol";
 
 abstract contract MarketTestBase is Test {
     event OrderUnderReplicated(uint256 indexed orderId, uint8 currentFilled, uint8 desiredReplicas);
@@ -31,12 +30,11 @@ abstract contract MarketTestBase is Test {
     uint256 internal constant FILE_ROOT = 0x123456789abcdef;
     string internal constant FILE_URI = "QmTestHash123";
 
-    function setUp() public virtual {
-        // Deploy verifiers
-        Verifier poiVerifier = new Verifier();
-        FspVerifier fspVerifier = new FspVerifier();
-        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
+    // Precompile addresses
+    address internal constant GROTH16_PRECOMPILE = 0x0300000000000000000000000000000000000001;
+    address internal constant PLONK_PRECOMPILE = 0x0300000000000000000000000000000000000004;
 
+    function setUp() public virtual {
         // Deploy NodeStaking impl + proxy (uninitialized)
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
@@ -48,7 +46,7 @@ abstract contract MarketTestBase is Test {
         FileMarket marketImpl = new FileMarket(address(ext));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
-            (address(this), address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
+            (address(this), address(stakingProxy))
         );
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
@@ -59,16 +57,18 @@ abstract contract MarketTestBase is Test {
         marketExt = FileMarketExtension(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
-        // Mock FSP verifier to always succeed so existing tests don't need valid proofs
+        // Mock Groth16 precompile to always return true (PoI + FSP proofs)
         vm.mockCall(
-            address(market.fspVerifier()),
-            abi.encodeWithSelector(FspVerifier.verifyCompressedProof.selector),
-            abi.encode()
+            GROTH16_PRECOMPILE,
+            abi.encodeWithSelector(IGroth16Precompile.verifyCompressedProof.selector),
+            abi.encode(true)
         );
 
-        // Mock PoI verifier to always succeed so existing tests don't need valid proofs
+        // Mock PLONK precompile to always return true (KeyLeak proofs)
         vm.mockCall(
-            address(market.poiVerifier()), abi.encodeWithSelector(Verifier.verifyCompressedProof.selector), abi.encode()
+            PLONK_PRECOMPILE,
+            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
+            abi.encode(true)
         );
 
         vm.deal(user1, 100 ether);
@@ -90,11 +90,11 @@ abstract contract MarketTestBase is Test {
     }
 
     function _emptyFspProof() internal pure returns (uint256[4] memory proof) {
-        // Returns zeroed proof array — works with mocked FSP verifier
+        // Returns zeroed proof array — works with mocked precompile
     }
 
     function _emptyPoiProof() internal pure returns (uint256[4] memory proof) {
-        // Returns zeroed proof array — works with mocked PoI verifier
+        // Returns zeroed proof array — works with mocked precompile
     }
 
     function _executeOrder(address node, uint256 orderId) internal {

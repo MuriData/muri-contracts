@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import {IPoiVerifier, IFspVerifier, IKeyLeakVerifier} from "../interfaces/IVerifiers.sol";
 import {NodeStaking} from "../NodeStaking.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -20,12 +19,12 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 internal constant MAX_DEDUP_PROBES = 10; // extra probes after first valid candidate to find a fresh pair
     uint256 internal constant MAX_CHALLENGE_EVICTIONS = 50; // max expired-order evictions per selection call
 
-    // --- Former immutables, now regular storage (slots 0–4) ---
+    // --- Core storage (slots 0–4) ---
     uint256 public genesisTs;
     NodeStaking public nodeStaking;
-    IPoiVerifier public poiVerifier;
-    IFspVerifier public fspVerifier;
-    IKeyLeakVerifier public keyleakVerifier;
+    uint256 private __reservedSlot2;
+    uint256 private __reservedSlot3;
+    uint256 private __reservedSlot4;
 
     address public owner;
     mapping(address => bool) public slashAuthorities;
@@ -220,16 +219,10 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
 
     function __MarketStorage_init(
         address _owner,
-        address _nodeStaking,
-        address _poiVerifier,
-        address _fspVerifier,
-        address _keyleakVerifier
+        address _nodeStaking
     ) internal onlyInitializing {
         owner = _owner;
         nodeStaking = NodeStaking(_nodeStaking);
-        poiVerifier = IPoiVerifier(_poiVerifier);
-        fspVerifier = IFspVerifier(_fspVerifier);
-        keyleakVerifier = IKeyLeakVerifier(_keyleakVerifier);
         genesisTs = block.timestamp;
         _marketLock = 1;
         nextOrderId = 1;

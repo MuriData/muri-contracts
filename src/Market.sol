@@ -17,13 +17,10 @@ contract FileMarket is MarketAccounting {
 
     function initialize(
         address _owner,
-        address _nodeStaking,
-        address _poiVerifier,
-        address _fspVerifier,
-        address _keyleakVerifier
+        address _nodeStaking
     ) external initializer {
         __UUPSUpgradeable_init();
-        __MarketStorage_init(_owner, _nodeStaking, _poiVerifier, _fspVerifier, _keyleakVerifier);
+        __MarketStorage_init(_owner, _nodeStaking);
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}

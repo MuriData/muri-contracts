@@ -6,17 +6,14 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
-import {Verifier} from "muri-artifacts/poi/poi_verifier.sol";
-import {Verifier as FspVerifier} from "muri-artifacts/fsp/fsp_verifier.sol";
-import {PlonkVerifier as KeyLeakVerifier} from "muri-artifacts/keyleak/keyleak_verifier.sol";
 
 /// @notice Deploys the full MuriData contract suite behind UUPS proxies.
-/// Two-step deployment resolves circular FileMarket ↔ NodeStaking reference:
-///   1. Deploy verifiers (stateless, no proxy needed)
-///   2. Deploy NodeStaking impl + proxy (uninitialized)
-///   3. Deploy FileMarketExtension (challenges + views)
-///   4. Deploy FileMarket impl + proxy (initialized with staking proxy addr)
-///   5. Initialize NodeStaking proxy with market proxy addr
+///
+/// Two-step deployment resolves circular FileMarket <> NodeStaking reference:
+///   1. Deploy NodeStaking impl + proxy (uninitialized)
+///   2. Deploy FileMarketExtension (challenges + views)
+///   3. Deploy FileMarket impl + proxy (initialized with staking proxy addr)
+///   4. Initialize NodeStaking proxy with market proxy addr
 ///
 /// Supports any Foundry signer: --private-key, --account (keystore),
 /// --ledger, or --trezor.
@@ -25,38 +22,29 @@ contract DeployScript is Script {
         vm.startBroadcast();
         address deployer = msg.sender;
 
-        // 1. Deploy stateless verifiers (no proxy needed)
-        Verifier poiVerifier = new Verifier();
-        FspVerifier fspVerifier = new FspVerifier();
-        KeyLeakVerifier keyleakVerifier = new KeyLeakVerifier();
-
-        console.log("PoI Verifier:", address(poiVerifier));
-        console.log("FSP Verifier:", address(fspVerifier));
-        console.log("KeyLeak Verifier:", address(keyleakVerifier));
-
-        // 2. Deploy NodeStaking implementation + proxy (uninitialized)
+        // 1. Deploy NodeStaking implementation + proxy (uninitialized)
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
         console.log("NodeStaking Impl:", address(stakingImpl));
         console.log("NodeStaking Proxy:", address(stakingProxy));
 
-        // 3. Deploy FileMarketExtension (challenges + views)
+        // 2. Deploy FileMarketExtension (challenges + views)
         FileMarketExtension extensionImpl = new FileMarketExtension();
         console.log("FileMarketExtension:", address(extensionImpl));
 
-        // 4. Deploy FileMarket implementation + proxy (initialized with staking proxy addr)
+        // 3. Deploy FileMarket implementation + proxy (initialized with staking proxy addr)
         FileMarket marketImpl = new FileMarket(address(extensionImpl));
         bytes memory marketInitData = abi.encodeCall(
             FileMarket.initialize,
-            (deployer, address(stakingProxy), address(poiVerifier), address(fspVerifier), address(keyleakVerifier))
+            (deployer, address(stakingProxy))
         );
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
         console.log("FileMarket Impl:", address(marketImpl));
         console.log("FileMarket Proxy:", address(marketProxy));
 
-        // 5. Initialize NodeStaking proxy with market proxy addr
+        // 4. Initialize NodeStaking proxy with market proxy addr
         NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
 
         console.log("Deployment complete!");
