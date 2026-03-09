@@ -81,7 +81,7 @@ abstract contract MarketOrders is MarketHelpers {
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
         uint256 randomness = uint256(keccak256(abi.encodePacked(order.file.root, publicKey))) % SNARK_SCALAR_FIELD;
-        uint256[4] memory publicInputs = [uint256(_commitment), randomness, publicKey, order.file.root];
+        uint256[5] memory publicInputs = [uint256(_commitment), randomness, publicKey, order.file.root, uint256(order.numChunks)];
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         // Assign node to order

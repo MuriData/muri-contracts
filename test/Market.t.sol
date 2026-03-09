@@ -1863,15 +1863,16 @@ contract MarketTest is Test {
     uint256 constant ZK_FILE_ROOT = 0x18b3b3b2725896132b5bc40a1046132880775d2160f1fbf5dc70ffc58a9228c7;
     bytes32 constant ZK_COMMITMENT = bytes32(0x22e408f58658a312456c0d8b4a1a4d89a8559c34975143bd68c34b3c60d5a6a5);
     uint256 constant ZK_PUB_KEY = 0x23711d48e08f5ea81d4c9f514ff8aa889adb5cab4130e70dbfd4925c363c5054;
+    uint256 constant ZK_NUM_LEAVES = 0x0000000000000000000000000000000000000000000000000000000000000008;
 
-    uint256 constant ZK_PROOF_0 = 0x2ce6840a98b72a6e16ea2a15a9fc84a379a4f95583b4c33ce7f2a6b5d8313c48;
-    uint256 constant ZK_PROOF_1 = 0x186a0b7c204b0ec083114fab37b1e26a80ec4f2dfda73395bb36f29e94cb0ebd;
-    uint256 constant ZK_PROOF_2 = 0x2a79489d428e20937deb42b914e5c2117dd607781ee625386ee8740f57e8cbbb;
-    uint256 constant ZK_PROOF_3 = 0x24627f3ef68a245b49e9e9ef2fa698ff562e0f82813abdbcc95b6a14037916a0;
-    uint256 constant ZK_PROOF_4 = 0x10f6687ccb2f78f38105670a6d71f5b9f92b1f3b9af0e8e9764dece7c263cdfb;
-    uint256 constant ZK_PROOF_5 = 0x21a3a427cb6a091ee1f184f7ebbeefb907d416ab6e169cef20d52b3c82a9e361;
-    uint256 constant ZK_PROOF_6 = 0x19a99957d700916830a92889b9de37bca0ac76dc0f035694638979cb0004cdf5;
-    uint256 constant ZK_PROOF_7 = 0x283b3f32d65918010fb52c5baff8a75b0cc4df09b94c7e9249134276129f0236;
+    uint256 constant ZK_PROOF_0 = 0x209fd2b918f284bca1af70bd630e4187ca4ee37b27a5033be33eaf0c1534499d;
+    uint256 constant ZK_PROOF_1 = 0x22789d5f30a7c08417502f7f1a0edd254f87d16fed8f377af2a4fa33da835293;
+    uint256 constant ZK_PROOF_2 = 0x148d331933fad1b95f3c5685bda3b5bdfbc44e0546bb65fbdb833f347a7597f8;
+    uint256 constant ZK_PROOF_3 = 0x2d1601c48459dfbdfc38cfdb3335393e97b5e345fb67da35d0372a223b8b1d80;
+    uint256 constant ZK_PROOF_4 = 0x05ab92bb667b4fed65888b0e3bd5a21d184545a47daa0e0df10c37c3f9ff8906;
+    uint256 constant ZK_PROOF_5 = 0x09d841afbd85e122027da638058ca83338065f9fe090680f9d1d557ad9b67184;
+    uint256 constant ZK_PROOF_6 = 0x1451f75013934006e920e0c97d89f434ec7c26b7f3a82dcfe179527705639410;
+    uint256 constant ZK_PROOF_7 = 0x2fc973302fce50cb74e5cf369aa63e30d393c1e0cce3e3c09f2a3ce8c7cf4bb0;
 
     // Storage slots (from forge inspect FileMarket storageLayout)
     // challengeSlots is now a mapping at slot 31, numChallengeSlots at slot 32
@@ -1934,12 +1935,12 @@ contract MarketTest is Test {
         nodeStaking.stakeNode{value: stakeAmt}(TEST_CAPACITY, ZK_PUB_KEY);
     }
 
-    /// @dev Place an order using the ZK file root
+    /// @dev Place an order using the ZK file root. numChunks=8 matches ZK_NUM_LEAVES in the proof fixture.
     function _placeZKOrder() internal returns (uint256 orderId) {
         MarketStorage.FileMeta memory fileMeta = MarketStorage.FileMeta({root: ZK_FILE_ROOT, uri: "QmZKTestFile"});
-        uint256 totalCost = uint256(256) * 4 * 1e12;
+        uint256 totalCost = uint256(8) * 4 * 1e12;
         vm.prank(user1);
-        orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(256), 4, 1, 1e12, _emptyFspProof());
+        orderId = market.placeOrder{value: totalCost}(fileMeta, uint32(8), 4, 1, 1e12, _emptyFspProof());
     }
 
     // =========================================================================

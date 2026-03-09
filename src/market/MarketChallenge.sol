@@ -36,7 +36,7 @@ abstract contract MarketChallenge is MarketHelpers {
         require(publicKey != 0, "node public key not set");
 
         uint256 slotRandomness = slot.randomness;
-        uint256[4] memory publicInputs = [uint256(_commitment), slotRandomness, publicKey, fileRootHash];
+        uint256[5] memory publicInputs = [uint256(_commitment), slotRandomness, publicKey, fileRootHash, uint256(order.numChunks)];
 
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
@@ -213,6 +213,7 @@ abstract contract MarketChallenge is MarketHelpers {
         challenge.randomness = randomness;
         challenge.challenger = msg.sender;
         challenge.fileRoot = order.file.root;
+        challenge.numChunks = order.numChunks;
 
         emit OnDemandChallengeIssued(_orderId, _node, msg.sender, deadline);
     }
@@ -232,13 +233,14 @@ abstract contract MarketChallenge is MarketHelpers {
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
         require(publicKey != 0, "node public key not set");
 
-        uint256[4] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot];
+        uint256[5] memory publicInputs = [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot, uint256(challenge.numChunks)];
         poiVerifier.verifyCompressedProof(_proof, publicInputs);
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement
         challenge.randomness = 0;
         challenge.challenger = address(0);
         challenge.fileRoot = 0;
+        challenge.numChunks = 0;
 
         emit OnDemandProofSubmitted(_orderId, msg.sender, _commitment);
     }
@@ -256,6 +258,7 @@ abstract contract MarketChallenge is MarketHelpers {
         challenge.randomness = 0;
         challenge.challenger = address(0);
         challenge.fileRoot = 0;
+        challenge.numChunks = 0;
 
         // If the order was cancelled/deleted, the node cannot be faulted — skip slashing.
         FileOrder storage order = orders[_orderId];

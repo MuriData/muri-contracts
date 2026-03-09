@@ -2,7 +2,7 @@
 pragma solidity ^0.8.13;
 
 interface IPoiVerifier {
-    function verifyCompressedProof(uint256[4] calldata compressedProof, uint256[4] calldata input) external view;
+    function verifyCompressedProof(uint256[4] calldata compressedProof, uint256[5] calldata input) external view;
 }
 
 interface IFspVerifier {

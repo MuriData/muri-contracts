@@ -99,7 +99,7 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Verify challenge is stored
         bytes32 key = keccak256(abi.encodePacked(orderId, node1));
-        (uint64 deadline, uint256 randomness, address challenger,) = market.onDemandChallenges(key);
+        (uint64 deadline, uint256 randomness, address challenger,,) = market.onDemandChallenges(key);
         assertGt(deadline, 0, "deadline set");
         assertGt(randomness, 0, "randomness set");
         assertEq(challenger, user2, "challenger recorded");
