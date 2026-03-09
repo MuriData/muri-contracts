@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../../src/Market.sol";
 import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
+import {FileMarketExtension2} from "../../src/FileMarketExtension2.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {IGroth16Precompile} from "../../src/interfaces/IGroth16Precompile.sol";
 import {IPlonkPrecompile} from "../../src/interfaces/IPlonkPrecompile.sol";
@@ -36,13 +37,11 @@ contract MarketFSPTest is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
-        // Deploy FileMarketExtension + FileMarket impl + proxy (initialized)
-        FileMarketExtension ext = new FileMarketExtension();
+        // Deploy extensions + FileMarket impl + proxy (initialized)
+        FileMarketExtension2 ext2 = new FileMarketExtension2();
+        FileMarketExtension ext = new FileMarketExtension(address(ext2));
         FileMarket marketImpl = new FileMarket(address(ext));
-        bytes memory marketInitData = abi.encodeCall(
-            FileMarket.initialize,
-            (address(this), address(stakingProxy))
-        );
+        bytes memory marketInitData = abi.encodeCall(FileMarket.initialize, (address(this), address(stakingProxy)));
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
         // Initialize NodeStaking with market proxy
@@ -59,11 +58,7 @@ contract MarketFSPTest is Test {
         );
 
         // Mock PLONK precompile (KeyLeak)
-        vm.mockCall(
-            PLONK_PRECOMPILE,
-            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
-            abi.encode(true)
-        );
+        vm.mockCall(PLONK_PRECOMPILE, abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector), abi.encode(true));
 
         vm.deal(user1, 100 ether);
         vm.deal(node1, 100 ether);
@@ -72,7 +67,9 @@ contract MarketFSPTest is Test {
     function test_ValidFSPProof_PlacesOrder() public {
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(FSP_ROOT, "QmFSPTestHash", FSP_NUM_CHUNKS, 4, 1, 1e12, _emptyFspProof());
+        uint256 orderId = market.placeOrder{value: totalCost}(
+            FSP_ROOT, "QmFSPTestHash", FSP_NUM_CHUNKS, 4, 1, 1e12, _emptyFspProof()
+        );
         assertGt(orderId, 0);
     }
 
@@ -106,7 +103,9 @@ contract MarketFSPTest is Test {
         // Place order with FSP proof
         uint256 totalCost = uint256(FSP_NUM_CHUNKS) * 4 * 1e12 * 1;
         vm.prank(user1);
-        uint256 orderId = market.placeOrder{value: totalCost}(FSP_ROOT, "QmFSPTestHash", FSP_NUM_CHUNKS, 4, 1, 1e12, _emptyFspProof());
+        uint256 orderId = market.placeOrder{value: totalCost}(
+            FSP_ROOT, "QmFSPTestHash", FSP_NUM_CHUNKS, 4, 1, 1e12, _emptyFspProof()
+        );
 
         // Execute order
         vm.prank(node1);

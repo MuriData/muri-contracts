@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
+import {FileMarketExtension2} from "../src/FileMarketExtension2.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 import {IGroth16Precompile} from "../src/interfaces/IGroth16Precompile.sol";
 import {IPlonkPrecompile} from "../src/interfaces/IPlonkPrecompile.sol";
@@ -39,12 +40,10 @@ contract UpgradeTest is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
-        FileMarketExtension ext = new FileMarketExtension();
+        FileMarketExtension2 ext2 = new FileMarketExtension2();
+        FileMarketExtension ext = new FileMarketExtension(address(ext2));
         FileMarket marketImpl = new FileMarket(address(ext));
-        bytes memory marketInitData = abi.encodeCall(
-            FileMarket.initialize,
-            (address(this), address(stakingProxy))
-        );
+        bytes memory marketInitData = abi.encodeCall(FileMarket.initialize, (address(this), address(stakingProxy)));
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
         NodeStaking(address(stakingProxy)).initialize(address(marketProxy));
@@ -59,11 +58,7 @@ contract UpgradeTest is Test {
             abi.encodeWithSelector(IGroth16Precompile.verifyCompressedProof.selector),
             abi.encode(true)
         );
-        vm.mockCall(
-            PLONK_PRECOMPILE,
-            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
-            abi.encode(true)
-        );
+        vm.mockCall(PLONK_PRECOMPILE, abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector), abi.encode(true));
 
         vm.deal(user1, 100 ether);
         vm.deal(node1, 100 ether);
@@ -89,7 +84,8 @@ contract UpgradeTest is Test {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         uint256[4] memory fspProof;
         vm.prank(owner_);
-        orderId = market.placeOrder{value: totalCost}(FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, fspProof);
+        orderId =
+            market.placeOrder{value: totalCost}(FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, fspProof);
     }
 
     function _executeOrder(address node, uint256 orderId) internal {
@@ -107,7 +103,8 @@ contract UpgradeTest is Test {
     // ---------------------------------------------------------------
 
     function test_UpgradeFileMarket_OwnerSucceeds() public {
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         address oldImpl = _getImplAddress(address(market));
 
@@ -120,7 +117,8 @@ contract UpgradeTest is Test {
     }
 
     function test_UpgradeFileMarket_NonOwnerReverts() public {
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
 
         vm.prank(nonOwner);
@@ -176,7 +174,8 @@ contract UpgradeTest is Test {
         ) = market.orders(orderId);
 
         // Upgrade
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         market.upgradeToAndCall(address(newImpl), "");
 
@@ -236,7 +235,8 @@ contract UpgradeTest is Test {
     // ---------------------------------------------------------------
 
     function test_ReinitializerV2_Works() public {
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         bytes memory reinitData = abi.encodeCall(FileMarketV2.initializeV2, (42));
         market.upgradeToAndCall(address(newImpl), reinitData);
@@ -246,7 +246,8 @@ contract UpgradeTest is Test {
     }
 
     function test_ReinitializerV2_CannotRunTwice() public {
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         bytes memory reinitData = abi.encodeCall(FileMarketV2.initializeV2, (42));
         market.upgradeToAndCall(address(newImpl), reinitData);
@@ -257,7 +258,8 @@ contract UpgradeTest is Test {
     }
 
     function test_CannotReInitializeV1_AfterUpgrade() public {
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         market.upgradeToAndCall(address(newImpl), "");
 
@@ -276,7 +278,8 @@ contract UpgradeTest is Test {
         _executeOrder(node1, orderId);
 
         // Upgrade both contracts
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newMarketImpl = new FileMarketV2(address(newExt));
         market.upgradeToAndCall(address(newMarketImpl), "");
 
@@ -334,7 +337,8 @@ contract UpgradeTest is Test {
         uint256 preNextOrderId = market.nextOrderId();
 
         // Upgrade with reinitializer that sets new V2 param
-        FileMarketExtension newExt = new FileMarketExtension();
+        FileMarketExtension2 newExt2 = new FileMarketExtension2();
+        FileMarketExtension newExt = new FileMarketExtension(address(newExt2));
         FileMarketV2 newImpl = new FileMarketV2(address(newExt));
         bytes memory reinitData = abi.encodeCall(FileMarketV2.initializeV2, (777));
         market.upgradeToAndCall(address(newImpl), reinitData);

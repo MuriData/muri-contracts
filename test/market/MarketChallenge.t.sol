@@ -169,11 +169,11 @@ contract MarketChallengeTest is MarketTestBase {
         // Before the fix, cleanup would delete the order even though a slot points to it.
 
         // The order should still exist because it's under active challenge
-        (address owner_,,,,,,) = marketExt.getOrderDetails(orderId);
+        (address owner_,,,,,,) = marketExt2.getOrderDetails(orderId);
         assertEq(owner_, user1, "order should survive cleanup while under active challenge");
 
         // The order's data should still be readable (not zeroed out)
-        (,, uint256 root_,,,,) = marketExt.getOrderDetails(orderId);
+        (,, uint256 root_,,,,) = marketExt2.getOrderDetails(orderId);
         assertGt(root_, 0, "order file root should not be zeroed");
     }
 

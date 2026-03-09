@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../../src/Market.sol";
 import {FileMarketExtension} from "../../src/FileMarketExtension.sol";
+import {FileMarketExtension2} from "../../src/FileMarketExtension2.sol";
 import {NodeStaking} from "../../src/NodeStaking.sol";
 import {IGroth16Precompile} from "../../src/interfaces/IGroth16Precompile.sol";
 import {IPlonkPrecompile} from "../../src/interfaces/IPlonkPrecompile.sol";
@@ -14,6 +15,7 @@ abstract contract MarketTestBase is Test {
 
     FileMarket internal market;
     FileMarketExtension internal marketExt;
+    FileMarketExtension2 internal marketExt2;
     NodeStaking internal nodeStaking;
 
     address internal user1 = address(0x1111);
@@ -39,15 +41,13 @@ abstract contract MarketTestBase is Test {
         NodeStaking stakingImpl = new NodeStaking();
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), "");
 
-        // Deploy FileMarketExtension
-        FileMarketExtension ext = new FileMarketExtension();
+        // Deploy FileMarketExtension2 (dashboard views) + FileMarketExtension (challenges + views)
+        FileMarketExtension2 ext2 = new FileMarketExtension2();
+        FileMarketExtension ext = new FileMarketExtension(address(ext2));
 
         // Deploy FileMarket impl + proxy (initialized)
         FileMarket marketImpl = new FileMarket(address(ext));
-        bytes memory marketInitData = abi.encodeCall(
-            FileMarket.initialize,
-            (address(this), address(stakingProxy))
-        );
+        bytes memory marketInitData = abi.encodeCall(FileMarket.initialize, (address(this), address(stakingProxy)));
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
         // Initialize NodeStaking with market proxy
@@ -55,6 +55,7 @@ abstract contract MarketTestBase is Test {
 
         market = FileMarket(payable(address(marketProxy)));
         marketExt = FileMarketExtension(payable(address(marketProxy)));
+        marketExt2 = FileMarketExtension2(payable(address(marketProxy)));
         nodeStaking = NodeStaking(address(stakingProxy));
 
         // Mock Groth16 precompile to always return true (PoI + FSP proofs)
@@ -65,11 +66,7 @@ abstract contract MarketTestBase is Test {
         );
 
         // Mock PLONK precompile to always return true (KeyLeak proofs)
-        vm.mockCall(
-            PLONK_PRECOMPILE,
-            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
-            abi.encode(true)
-        );
+        vm.mockCall(PLONK_PRECOMPILE, abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector), abi.encode(true));
 
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
@@ -108,8 +105,9 @@ abstract contract MarketTestBase is Test {
     {
         totalCost = uint256(numChunks) * uint256(periods) * price * uint256(replicas);
         vm.prank(owner_);
-        orderId =
-            market.placeOrder{value: totalCost}(FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, _emptyFspProof());
+        orderId = market.placeOrder{value: totalCost}(
+            FILE_ROOT, FILE_URI, numChunks, periods, replicas, price, _emptyFspProof()
+        );
     }
 
     function _placeDefaultOrder(address owner_, uint8 replicas) internal returns (uint256 orderId, uint256 totalCost) {

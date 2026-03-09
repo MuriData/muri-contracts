@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {Script, console} from "forge-std/Script.sol";
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
+import {FileMarketExtension2} from "../src/FileMarketExtension2.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 
 /// @notice Reusable UUPS upgrade script for FileMarket and NodeStaking proxies.
@@ -33,11 +34,13 @@ contract UpgradeScript is Script {
 
         vm.startBroadcast();
 
-        // Deploy new extension and implementations
-        FileMarketExtension newExtension = new FileMarketExtension();
+        // Deploy new extensions and implementations
+        FileMarketExtension2 newExtension2 = new FileMarketExtension2();
+        FileMarketExtension newExtension = new FileMarketExtension(address(newExtension2));
         FileMarket newMarketImpl = new FileMarket(address(newExtension));
         NodeStaking newStakingImpl = new NodeStaking();
 
+        console.log("  new FileMarketExtension2:", address(newExtension2));
         console.log("  new FileMarketExtension:", address(newExtension));
         console.log("  new FileMarket impl:", address(newMarketImpl));
         console.log("  new NodeStaking impl:", address(newStakingImpl));

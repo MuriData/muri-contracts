@@ -5,6 +5,7 @@ import {Script, console} from "forge-std/Script.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {FileMarket} from "../src/Market.sol";
 import {FileMarketExtension} from "../src/FileMarketExtension.sol";
+import {FileMarketExtension2} from "../src/FileMarketExtension2.sol";
 import {NodeStaking} from "../src/NodeStaking.sol";
 
 /// @notice Deploys the full MuriData contract suite behind UUPS proxies.
@@ -29,16 +30,15 @@ contract DeployScript is Script {
         console.log("NodeStaking Impl:", address(stakingImpl));
         console.log("NodeStaking Proxy:", address(stakingProxy));
 
-        // 2. Deploy FileMarketExtension (challenges + views)
-        FileMarketExtension extensionImpl = new FileMarketExtension();
+        // 2. Deploy FileMarketExtension2 (dashboard views) + FileMarketExtension (challenges + lightweight views)
+        FileMarketExtension2 extension2Impl = new FileMarketExtension2();
+        FileMarketExtension extensionImpl = new FileMarketExtension(address(extension2Impl));
+        console.log("FileMarketExtension2:", address(extension2Impl));
         console.log("FileMarketExtension:", address(extensionImpl));
 
         // 3. Deploy FileMarket implementation + proxy (initialized with staking proxy addr)
         FileMarket marketImpl = new FileMarket(address(extensionImpl));
-        bytes memory marketInitData = abi.encodeCall(
-            FileMarket.initialize,
-            (deployer, address(stakingProxy))
-        );
+        bytes memory marketInitData = abi.encodeCall(FileMarket.initialize, (deployer, address(stakingProxy)));
         ERC1967Proxy marketProxy = new ERC1967Proxy(address(marketImpl), marketInitData);
 
         console.log("FileMarket Impl:", address(marketImpl));
