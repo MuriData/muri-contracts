@@ -2,6 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {MarketTestBase} from "./MarketBase.t.sol";
+
 /// @notice Tests for the economic redesign (Changes 1-6)
 contract MarketEconomicsTest is MarketTestBase {
     // =========================================================================
@@ -686,8 +687,9 @@ contract MarketEconomicsTest is MarketTestBase {
         uint256 cost2 = uint256(maxSize) * uint256(periods) * highPrice;
         vm.deal(user1, user1.balance + cost2);
         vm.prank(user1);
-        uint256 orderId2 =
-            market.placeOrder{value: cost2}(FILE_ROOT, FILE_URI, uint32(maxSize), periods, 1, highPrice, _emptyFspProof());
+        uint256 orderId2 = market.placeOrder{value: cost2}(
+            FILE_ROOT, FILE_URI, uint32(maxSize), periods, 1, highPrice, _emptyFspProof()
+        );
 
         _executeOrder(node1, orderId1);
         _executeOrder(node1, orderId2);

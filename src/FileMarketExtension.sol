@@ -20,6 +20,8 @@ contract FileMarketExtension is MarketViews {
         revert("not upgradeable");
     }
 
+    receive() external payable {}
+
     /// @notice Delegates unrecognized selectors to extension2 (dashboard views).
     fallback() external payable {
         address ext2 = extension2;

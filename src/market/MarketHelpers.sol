@@ -52,7 +52,11 @@ abstract contract MarketHelpers is MarketAdmin {
     }
 
     /// @notice Find a node's index in the assignment array.
-    function _getNodeAssignmentIndex(uint256 _orderId, address _node) internal view returns (uint256 index, bool found) {
+    function _getNodeAssignmentIndex(uint256 _orderId, address _node)
+        internal
+        view
+        returns (uint256 index, bool found)
+    {
         NodeAssignment[] storage assignments = orderAssignments[_orderId];
         for (uint256 i = 0; i < assignments.length; i++) {
             if (assignments[i].node == _node) {
@@ -276,7 +280,8 @@ abstract contract MarketHelpers is MarketAdmin {
         uint256 burnAmount = totalSlashed - reporterReward - clientComp;
         totalBurnedFromSlash += burnAmount;
         if (burnAmount > 0) {
-            payable(address(0)).transfer(burnAmount);
+            (bool burned,) = payable(address(0)).call{value: burnAmount}("");
+            require(burned, "burn failed");
         }
     }
 

@@ -217,10 +217,7 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         _disableInitializers();
     }
 
-    function __MarketStorage_init(
-        address _owner,
-        address _nodeStaking
-    ) internal onlyInitializing {
+    function __MarketStorage_init(address _owner, address _nodeStaking) internal onlyInitializing {
         owner = _owner;
         nodeStaking = NodeStaking(_nodeStaking);
         genesisTs = block.timestamp;

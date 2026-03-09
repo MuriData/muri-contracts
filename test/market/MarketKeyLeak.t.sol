@@ -84,11 +84,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         vm.deal(KL_REPORTER, 1 ether);
 
         // Mock PLONK precompile to reject (simulates invalid proof)
-        vm.mockCall(
-            PLONK_PRECOMPILE,
-            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
-            abi.encode(false)
-        );
+        vm.mockCall(PLONK_PRECOMPILE, abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector), abi.encode(false));
 
         vm.prank(KL_REPORTER);
         vm.expectRevert();
@@ -107,11 +103,7 @@ contract MarketKeyLeakTest is MarketTestBase {
         _stakeNodeWithLeakedKey(node1);
 
         // Mock PLONK precompile to reject (wrong reporter → wrong public inputs → proof invalid)
-        vm.mockCall(
-            PLONK_PRECOMPILE,
-            abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector),
-            abi.encode(false)
-        );
+        vm.mockCall(PLONK_PRECOMPILE, abi.encodeWithSelector(IPlonkPrecompile.verifyProof.selector), abi.encode(false));
 
         // Call from user1 instead of KL_REPORTER — proof was generated for 0xDEAD
         vm.prank(user1);

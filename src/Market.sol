@@ -15,10 +15,7 @@ contract FileMarket is MarketAccounting {
         _disableInitializers();
     }
 
-    function initialize(
-        address _owner,
-        address _nodeStaking
-    ) external initializer {
+    function initialize(address _owner, address _nodeStaking) external initializer {
         __UUPSUpgradeable_init();
         __MarketStorage_init(_owner, _nodeStaking);
     }

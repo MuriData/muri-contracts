@@ -10,10 +10,8 @@ import {KeyleakVK} from "muri-artifacts/keyleak/keyleak_vk.sol";
 /// @notice Thin verification helpers that call native precompiles with VK constants
 ///         imported from muri-artifacts. Replaces the ~500-line generated Solidity verifiers.
 library PrecompileVerifiers {
-    IGroth16Precompile internal constant GROTH16 =
-        IGroth16Precompile(0x0300000000000000000000000000000000000001);
-    IPlonkPrecompile internal constant PLONK =
-        IPlonkPrecompile(0x0300000000000000000000000000000000000004);
+    IGroth16Precompile internal constant GROTH16 = IGroth16Precompile(0x0300000000000000000000000000000000000001);
+    IPlonkPrecompile internal constant PLONK = IPlonkPrecompile(0x0300000000000000000000000000000000000004);
 
     error ProofInvalid();
 

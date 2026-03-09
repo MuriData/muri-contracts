@@ -29,7 +29,7 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
         _locked = 1;
     }
 
-    function _authorizeUpgrade(address) internal override {
+    function _authorizeUpgrade(address) internal view override {
         require(msg.sender == IMarketOwner(market).owner(), "not market owner");
     }
 
@@ -49,7 +49,7 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
     address[] public nodeList; // List of all registered node addresses
     mapping(address => uint256) public nodeIndexInList; // index of node in nodeList for O(1) removal
     mapping(uint256 => address) public publicKeyOwner; // enforces unique ZK identity keys
-    uint256 public constant STAKE_PER_CHUNK = 4 * 10**14; // configurable
+    uint256 public constant STAKE_PER_CHUNK = 4 * 10 ** 14; // configurable
 
     /// @dev BN254 scalar field order (Fr). Public key must be a valid field element.
     uint256 internal constant SNARK_SCALAR_FIELD = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001;
@@ -312,7 +312,8 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
         // Send slashed funds to market contract (caller) for redistribution
         totalSlashed = slashAmount + actualAdditionalSlash;
         if (totalSlashed > 0) {
-            payable(msg.sender).transfer(totalSlashed);
+            (bool sent,) = payable(msg.sender).call{value: totalSlashed}("");
+            require(sent, "transfer failed");
         }
 
         emit NodeSlashed(node, slashAmount, newCapacity, forcedOrderExit);
@@ -322,7 +323,8 @@ contract NodeStaking is Initializable, UUPSUpgradeable {
             uint256 residual = info.stake;
             if (residual > 0) {
                 info.stake = 0;
-                BURN_ADDRESS.transfer(residual);
+                (bool burned,) = BURN_ADDRESS.call{value: residual}("");
+                require(burned, "burn failed");
             }
             // Remove from nodeList (swap-and-pop)
             uint256 idx = nodeIndexInList[node];

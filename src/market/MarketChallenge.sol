@@ -380,7 +380,8 @@ abstract contract MarketChallenge is MarketHelpers {
         uint256 _orderId,
         uint256 _nonce
     ) internal view returns (address) {
-        uint256 idx = uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _assignments.length;
+        uint256 idx =
+            uint256(keccak256(abi.encodePacked(_randomness, _orderId, _nonce))) % _assignments.length;
         address candidate = _assignments[idx].node;
         if (nodeActiveChallengeCount[candidate] == 0) return candidate;
         // Linear scan for an unchallenged node (bounded by MAX_REPLICAS = 10)
