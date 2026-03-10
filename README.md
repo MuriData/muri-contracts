@@ -2,6 +2,8 @@
 
 MuriData is a prototype decentralized storage marketplace that pairs a payment/assignment layer (`FileMarket.sol`) with a collateralized staking layer (`NodeStaking.sol`). Clients prepay for storage, nodes stake collateral proportional to the capacity they promise, and a parallel challenge-slot system verifies storage integrity through Groth16 zk-proofs with on-chain slashing.
 
+The zero-knowledge components rely on the **MURI (Measurable Unique Replica Integrity)** protocol, enforcing a sequential two-pass sealing transform (for archives), File Size Proofs (FSP), standard Proof of Integrity (PoI), and Archive PoI. The proofs are verified via a two-phase commit-reveal protocol.
+
 The system is not production ready, but the current implementation demonstrates the full lifecycle of an order, including node participation, reward accrual, challenge-based proof verification, and forced exits.
 
 ---
@@ -21,7 +23,8 @@ The system is not production ready, but the current implementation demonstrates 
   ```
 
 - **`NodeStaking.sol`** — tracks node stake, capacity, usage, and ZK public keys; exposes slash and capacity adjustment hooks that only `FileMarket` can call.
-- **`poi_verifier.sol`** (imported as `Verifier`) — Groth16 zk-proof verifier used during challenge rounds to validate multi-leaf Proof of Integrity (8 parallel Merkle openings per proof, 4 public inputs: commitment, randomness, publicKey, fileRootHash).
+- **`poi_verifier.sol`** (imported as `Verifier`) — Groth16 zk-proof verifier used during standard challenge rounds to validate multi-leaf Proof of Integrity.
+- **`fsp_verifier.sol`** — Verifier for the File Size Proof, certifying a file's `numChunks` at order placement.
 - **`keyleak_verifier.sol`** (imported as `PlonkVerifier`) — PLONK verifier for key leak proofs, enabling full-stake slashing of nodes whose secret key is compromised.
 
 Both `NodeStaking` and verifier contracts are deployed by `FileMarket`'s constructor; `FileMarket` is the sole privileged caller of `NodeStaking` (`onlyMarket` modifier).
@@ -166,6 +169,7 @@ flowchart LR
     end
     subgraph Verifiers
         PoI[PoI Verifier &lpar;Groth16&rpar;]
+        FSP[FSP Verifier &lpar;Groth16&rpar;]
         KL[KeyLeak Verifier &lpar;PLONK&rpar;]
     end
     subgraph Nodes
