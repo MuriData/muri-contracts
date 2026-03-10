@@ -146,7 +146,7 @@ contract MarketViewsTest is MarketTestBase {
             uint256 totalSlotsCount
         ) = marketExt2.getProofSystemStats();
 
-        // 1 order → ceil(sqrt(1)) = 1 slot, 1 active
+        // 1 order → ceil(1/20) = 1 slot, 1 active
         assertGt(activeSlotsCount, 0);
         assertEq(expiredSlotsCount, 0);
         assertEq(currentBlockNumber, block.number);

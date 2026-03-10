@@ -101,9 +101,13 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 public totalBurnedFromSlash;
     uint256 public totalReporterRewards;
 
-    // --- Challenge slot system (variable slots with sqrt(N) scaling) ---
+    // --- Challenge slot system (linear scaling: ceil(N / ordersPerSlot)) ---
     uint256 public constant MIN_CHALLENGE_SLOTS = 1;
-    uint256 public constant MAX_CHALLENGE_SLOTS = 50;
+    uint256 internal constant DEFAULT_MAX_CHALLENGE_SLOTS = 50;
+    uint256 internal constant ABSOLUTE_MAX_CHALLENGE_SLOTS = 200; // hard ceiling for admin-tunable max
+    uint256 internal constant DEFAULT_ORDERS_PER_SLOT = 20; // default: each slot handles ~20 orders
+    uint256 internal constant MIN_ORDERS_PER_SLOT = 1;
+    uint256 internal constant MAX_ORDERS_PER_SLOT = 200;
     uint256 internal constant MAX_ACTIVATE_PER_CALL = 10; // bounds activation loop gas
     // Timing budget (Avalanche C-Chain, ~2s/block):
     //   50 blocks = ~100 seconds
@@ -165,8 +169,12 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     // Persistent cursor for amortized expired-slot sweep
     uint256 public sweepCursor;
 
-    // Reserve 196 slots for future storage variables
-    uint256[196] private __gap;
+    // Challenge slot scaling parameters (admin-tunable)
+    uint256 public ordersPerSlot; // orders per challenge slot (0 = use DEFAULT_ORDERS_PER_SLOT)
+    uint256 public maxChallengeSlots; // admin-tunable cap (0 = use DEFAULT_MAX_CHALLENGE_SLOTS)
+
+    // Reserve 194 slots for future storage variables
+    uint256[194] private __gap;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
@@ -211,6 +219,8 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     event SlotsActivated(uint256 activatedCount);
     event ChallengeSlotsScaled(uint256 oldCount, uint256 newCount);
     event ExpiredSlotsProcessed(uint256 processedCount, address indexed reporter);
+    event OrdersPerSlotUpdated(uint256 oldValue, uint256 newValue);
+    event MaxChallengeSlotsUpdated(uint256 oldValue, uint256 newValue);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

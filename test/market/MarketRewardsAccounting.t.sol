@@ -71,19 +71,19 @@ contract MarketRewardsAccountingTest is MarketTestBase {
     }
 
     function test_SetReporterRewardBps_Success() public {
-        market.setReporterRewardBps(2500);
+        marketExt2.setReporterRewardBps(2500);
         assertEq(market.reporterRewardBps(), 2500);
     }
 
     function test_SetReporterRewardBps_RevertNotOwner() public {
         vm.prank(user1);
         vm.expectRevert("not owner");
-        market.setReporterRewardBps(1000);
+        marketExt2.setReporterRewardBps(1000);
     }
 
     function test_SetReporterRewardBps_RevertExceedsMax() public {
         vm.expectRevert("exceeds max bps");
-        market.setReporterRewardBps(5001);
+        marketExt2.setReporterRewardBps(5001);
     }
 
     function test_ClaimReporterRewards_AfterSlotExpiry() public {

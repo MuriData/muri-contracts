@@ -441,7 +441,7 @@ contract MarketTest is Test {
         assertEq(market.reporterPendingRewards(user2), 0, "authority slash has no reporter reward");
 
         // All slash should be burned
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = marketExt2.getSlashRedistributionStats();
         assertTrue(totalReceived > 0, "slashed funds received");
         assertEq(totalRewards, 0, "no reporter rewards for authority slash");
         assertEq(totalReceived, totalBurned, "all funds burned");
@@ -468,7 +468,7 @@ contract MarketTest is Test {
         // No reporter reward for voluntary quit
         assertEq(market.reporterPendingRewards(node1), 0, "no reporter reward for quit");
 
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = marketExt2.getSlashRedistributionStats();
         assertTrue(totalReceived > 0, "slashed funds received");
         assertEq(totalRewards, 0, "no rewards for voluntary quit");
         assertEq(totalReceived, totalBurned, "all funds burned");
@@ -799,7 +799,7 @@ contract MarketTest is Test {
     }
 
     function test_ReporterReward_MaxBps() public {
-        market.setReporterRewardBps(5000); // 50%
+        marketExt2.setReporterRewardBps(5000); // 50%
 
         _stakeTestNode(node1, 0x1234);
 
@@ -809,7 +809,7 @@ contract MarketTest is Test {
         vm.prank(user2);
         market.slashNode(node1, slashAmount, "test");
 
-        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = market.getSlashRedistributionStats();
+        (uint256 totalReceived, uint256 totalBurned, uint256 totalRewards,,) = marketExt2.getSlashRedistributionStats();
         assertEq(totalRewards, 0, "still no reward for authority slash even at 50%");
         assertEq(totalReceived, totalBurned);
     }
@@ -2168,7 +2168,7 @@ contract MarketTest is Test {
     }
 
     function test_ReporterReward_ZeroBps_NoReward() public {
-        market.setReporterRewardBps(0);
+        marketExt2.setReporterRewardBps(0);
 
         _stakeTestNode(node1, 0x1234);
         _stakeTestNode(node2, 0xABCD);

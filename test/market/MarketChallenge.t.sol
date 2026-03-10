@@ -231,8 +231,10 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_AdvanceSlot_PrefersUnchallengedOrdersAndNodes() public {
-        // With sqrt(N) scaling, need 4 orders to get ceil(sqrt(4)) = 2 slots.
-        // 2 nodes with large capacity, 4 small orders (1 replica each).
+        // With linear scaling (default ordersPerSlot=20), need 40 orders to get 2 slots.
+        // Set ordersPerSlot=2 so 4 orders → ceil(4/2) = 2 slots.
+        market.setOrdersPerSlot(2);
+
         _stakeNode(node1, 4096, 0x1111);
         _stakeNode(node2, 4096, 0x2222);
 
@@ -246,7 +248,7 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node2, order3);
         _executeOrder(node2, order4);
 
-        // Activate: ceil(sqrt(4)) = 2 slots
+        // Activate: ceil(4/2) = 2 slots
         marketExt.activateSlots();
         assertEq(market.numChallengeSlots(), 2, "should have 2 challenge slots");
 
@@ -383,9 +385,10 @@ contract MarketChallengeTest is MarketTestBase {
     // VARIABLE CHALLENGE SLOT SCALING TESTS
     // =========================================================================
 
-    function test_SlotsScaleUp_WithSqrt() public {
-        // 9 orders → ceil(sqrt(9)) = 3 slots
-        // Use small orders (64 chunks) and large capacity nodes
+    function test_SlotsScaleUp_Linear() public {
+        // With ordersPerSlot=3: 9 orders → ceil(9/3) = 3 slots
+        market.setOrdersPerSlot(3);
+
         _stakeNode(node1, 4096, 0x1111);
         _stakeNode(node2, 4096, 0x2222);
         _stakeNode(node3, 4096, 0x3333);
@@ -405,11 +408,12 @@ contract MarketChallengeTest is MarketTestBase {
         }
 
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 3, "9 orders should yield 3 slots");
+        assertEq(market.numChallengeSlots(), 3, "9 orders with ordersPerSlot=3 should yield 3 slots");
     }
 
     function test_SlotsScaleDown_WhenOrdersExpire() public {
-        // Start with 4 orders → ceil(sqrt(4)) = 2 slots
+        // Set ordersPerSlot=2 so 4 orders → ceil(4/2) = 2 slots
+        market.setOrdersPerSlot(2);
         _stakeNode(node1, 4096, 0x1111);
 
         // Place 4 small short-lived orders (1 period)
@@ -419,7 +423,7 @@ contract MarketChallengeTest is MarketTestBase {
         }
 
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 2, "4 orders should yield 2 slots");
+        assertEq(market.numChallengeSlots(), 2, "4 orders with ordersPerSlot=2 should yield 2 slots");
 
         // Expire challenges and orders
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
@@ -435,11 +439,11 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_MaxSlotsCapped() public {
-        // Create enough orders that sqrt(N) > MAX_CHALLENGE_SLOTS (50)
-        // Need > 2500 orders. Each node has MAX_ORDERS_PER_NODE = 50,
-        // so need 53 nodes × 50 orders = 2650 orders.
-        // ceil(sqrt(2650)) = 52 > MAX=50 → capped.
-        uint256 numNodes = 53;
+        // With ordersPerSlot=1, N orders → N slots, but capped at maxChallengeSlots (default 50).
+        // 60 orders with ordersPerSlot=1 → target=60 → capped to 50.
+        market.setOrdersPerSlot(1);
+
+        uint256 numNodes = 2;
         for (uint256 n = 0; n < numNodes; n++) {
             address nodeAddr = address(uint160(0x10000 + n));
             vm.deal(nodeAddr, 100 ether);
@@ -448,14 +452,38 @@ contract MarketChallengeTest is MarketTestBase {
 
         for (uint256 n = 0; n < numNodes; n++) {
             address nodeAddr = address(uint160(0x10000 + n));
-            for (uint256 j = 0; j < 50; j++) {
+            for (uint256 j = 0; j < 30; j++) {
                 (uint256 oid,) = _placeOrder(user1, 1, 4, 1, 1e12);
                 _executeOrder(nodeAddr, oid);
             }
         }
 
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 50, "slots should be capped at MAX_CHALLENGE_SLOTS");
+        assertEq(market.numChallengeSlots(), 50, "slots should be capped at default MAX_CHALLENGE_SLOTS");
+    }
+
+    function test_MaxSlotsCapped_AdminTunable() public {
+        // Admin raises maxChallengeSlots to 100, ordersPerSlot=1, 80 orders → 80 slots
+        market.setMaxChallengeSlots(100);
+        market.setOrdersPerSlot(1);
+
+        uint256 numNodes = 2;
+        for (uint256 n = 0; n < numNodes; n++) {
+            address nodeAddr = address(uint160(0x10000 + n));
+            vm.deal(nodeAddr, 100 ether);
+            _stakeNode(nodeAddr, 4096, 0x1000 + n);
+        }
+
+        for (uint256 n = 0; n < numNodes; n++) {
+            address nodeAddr = address(uint160(0x10000 + n));
+            for (uint256 j = 0; j < 40; j++) {
+                (uint256 oid,) = _placeOrder(user1, 1, 4, 1, 1e12);
+                _executeOrder(nodeAddr, oid);
+            }
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 80, "slots should scale to 80 with raised max");
     }
 
     function test_SweepCursor_WrapsAround() public {
@@ -492,9 +520,10 @@ contract MarketChallengeTest is MarketTestBase {
     }
 
     function test_ShrinkSkipsActiveMidFlightSlots() public {
-        // Start with 4 orders → 2 slots, both active.
-        // Then reduce to 1 challengeable order. activateSlots should try to shrink
-        // from 2 to 1 but skip if slot 1 is mid-flight.
+        // Set ordersPerSlot=2 so 4 orders → 2 slots, both active.
+        // Then reduce challengeable orders. activateSlots should try to shrink
+        // but skip if slot is mid-flight.
+        market.setOrdersPerSlot(2);
         _stakeNode(node1, 4096, 0x1111);
         _stakeNode(node2, 4096, 0x2222);
 
@@ -509,17 +538,74 @@ contract MarketChallengeTest is MarketTestBase {
         _executeOrder(node2, order4);
 
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 2, "4 orders should yield 2 slots");
+        assertEq(market.numChallengeSlots(), 2, "4 orders with ordersPerSlot=2 should yield 2 slots");
 
         // Expire orders 1 and 2 (1-period orders)
         vm.warp(block.timestamp + 7 days + 1);
 
         // Don't expire the challenge deadlines — slots are still mid-flight
-        // Now call activateSlots → tries to shrink to ceil(sqrt(2)) = 2
-        // Since we still have 2 challengeable long-lived orders, target stays at 2
+        // activateSlots should try to shrink but respect mid-flight slots
         marketExt.activateSlots();
 
         // Slots should not have decreased below what's active mid-flight
         assertGe(market.numChallengeSlots(), 1, "should not shrink below active mid-flight slots");
+    }
+
+    // =========================================================================
+    // ADMIN TUNING TESTS
+    // =========================================================================
+
+    function test_SetOrdersPerSlot_AdminOnly() public {
+        vm.prank(user1);
+        vm.expectRevert("not owner");
+        market.setOrdersPerSlot(10);
+    }
+
+    function test_SetOrdersPerSlot_BoundsCheck() public {
+        vm.expectRevert("exceeds max");
+        market.setOrdersPerSlot(201);
+
+        // 0 is valid (restores default)
+        market.setOrdersPerSlot(0);
+        assertEq(market.ordersPerSlot(), 0);
+    }
+
+    function test_SetMaxChallengeSlots_AdminOnly() public {
+        vm.prank(user1);
+        vm.expectRevert("not owner");
+        market.setMaxChallengeSlots(100);
+    }
+
+    function test_SetMaxChallengeSlots_BoundsCheck() public {
+        vm.expectRevert("exceeds absolute max");
+        market.setMaxChallengeSlots(201);
+
+        // 0 is valid (restores default)
+        market.setMaxChallengeSlots(0);
+        assertEq(market.maxChallengeSlots(), 0);
+    }
+
+    function test_DefaultScaling_20OrdersPerSlot() public {
+        // With default ordersPerSlot (0 → 20), 20 orders → 1 slot, 21 → 2 slots
+        _stakeNode(node1, 65536, 0x1111);
+
+        for (uint256 i = 0; i < 20; i++) {
+            (uint256 oid,) = _placeOrder(user1, 1, 4, 1, 1e12);
+            _executeOrder(node1, oid);
+        }
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 1, "20 orders with default ordersPerSlot should yield 1 slot");
+
+        // Add one more → ceil(21/20) = 2
+        (uint256 oid21,) = _placeOrder(user1, 1, 4, 1, 1e12);
+        _executeOrder(node1, oid21);
+
+        // Expire existing challenges first so shrink/grow works cleanly
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        vm.prank(user2);
+        marketExt.processExpiredSlots();
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 2, "21 orders with default ordersPerSlot should yield 2 slots");
     }
 }
