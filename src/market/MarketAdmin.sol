@@ -34,7 +34,7 @@ abstract contract MarketAdmin is MarketStorage {
     }
 
     /// @notice Set the maximum number of challenge slots.
-    /// @param _maxSlots Maximum slots (1–200). Set to 0 to restore default (50).
+    /// @param _maxSlots Maximum slots (2–200). Set to 0 to restore default (50).
     function setMaxChallengeSlots(uint256 _maxSlots) external onlyOwner {
         require(_maxSlots <= ABSOLUTE_MAX_CHALLENGE_SLOTS, "exceeds absolute max");
         if (_maxSlots > 0) {

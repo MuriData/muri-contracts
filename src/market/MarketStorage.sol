@@ -102,7 +102,7 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 public totalReporterRewards;
 
     // --- Challenge slot system (linear scaling: ceil(N / ordersPerSlot)) ---
-    uint256 public constant MIN_CHALLENGE_SLOTS = 1;
+    uint256 public constant MIN_CHALLENGE_SLOTS = 2;
     uint256 internal constant DEFAULT_MAX_CHALLENGE_SLOTS = 50;
     uint256 internal constant ABSOLUTE_MAX_CHALLENGE_SLOTS = 200; // hard ceiling for admin-tunable max
     uint256 internal constant DEFAULT_ORDERS_PER_SLOT = 20; // default: each slot handles ~20 orders

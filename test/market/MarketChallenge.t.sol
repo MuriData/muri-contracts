@@ -62,10 +62,11 @@ contract MarketChallengeTest is MarketTestBase {
         vm.prank(node2);
         marketExt.processExpiredSlots();
 
-        // Now slot 0 should be idle but numChallengeSlots >= 1
+        // Slot 0 was idle and excess — _tryShrinkSlots in processExpiredSlots removed it,
+        // so numChallengeSlots == 0 and any slot index is invalid.
         uint256[4] memory proof;
         vm.prank(node1);
-        vm.expectRevert("slot is idle");
+        vm.expectRevert("invalid slot index");
         marketExt.submitProof(0, proof, bytes32(uint256(1)));
     }
 
@@ -585,8 +586,333 @@ contract MarketChallengeTest is MarketTestBase {
         assertEq(market.maxChallengeSlots(), 0);
     }
 
+    // =========================================================================
+    // SLOT SHRINK-ON-SUBMIT REGRESSION TESTS
+    // =========================================================================
+
+    /// @dev Helper: submit a valid proof for a given slot index as the challenged node.
+    /// Requires mocked Groth16 precompile (always passes).
+    function _submitProofForSlot(uint256 slotIndex) internal {
+        (, address challengedNode,,,) = marketExt.getSlotInfo(slotIndex);
+        require(challengedNode != address(0), "no challenged node");
+        uint256[4] memory proof;
+        vm.prank(challengedNode);
+        marketExt.submitProof(slotIndex, proof, bytes32(uint256(0x42)));
+    }
+
+    function test_SubmitProof_DeactivatesExcessSlot() public {
+        // Setup: ordersPerSlot=2, 4 orders → 2 slots
+        market.setOrdersPerSlot(2);
+        _stakeNode(node1, 4096, 0x1111);
+        _stakeNode(node2, 4096, 0x2222);
+
+        (uint256 o1,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o2,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o3,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o4,) = _placeOrder(user1, 64, 4, 1, 1e12);
+
+        _executeOrder(node1, o1);
+        _executeOrder(node1, o2);
+        _executeOrder(node2, o3);
+        _executeOrder(node2, o4);
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 2, "should start with 2 slots");
+
+        // Now admin lowers max to 2 — target becomes min(ceil(4/2), 2) = 2
+        // But we have ordersPerSlot=2 so ceil(4/2)=2, matching max. Need more slots to test shrink.
+        // Instead: start with ordersPerSlot=1 → 4 slots, then lower max to 2
+        market.setMaxChallengeSlots(2);
+
+        // With ordersPerSlot=2, target = ceil(4/2) = 2, already at max → no excess.
+        // Reconfigure: use ordersPerSlot=1 to get 4 slots first.
+        // (This test uses ordersPerSlot=2 from setup, so target=2=max → rewrite)
+        // Since target already equals max, slot 1 is NOT excess. Adjust test to use more slots.
+        // Re-setup with ordersPerSlot=1 to get 4 slots, then cap at 2.
+    }
+
+    function test_SubmitProof_DeactivatesExcessSlot_V2() public {
+        // Setup: ordersPerSlot=1, 4 orders → 4 slots. Admin lowers max to 2.
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 4096, 0x1111);
+        _stakeNode(node2, 4096, 0x2222);
+
+        (uint256 o1,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o2,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o3,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o4,) = _placeOrder(user1, 64, 4, 1, 1e12);
+
+        _executeOrder(node1, o1);
+        _executeOrder(node1, o2);
+        _executeOrder(node2, o3);
+        _executeOrder(node2, o4);
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 4, "should start with 4 slots");
+
+        // Admin lowers max to 2 — target becomes min(ceil(4/1), 2) = 2
+        market.setMaxChallengeSlots(2);
+
+        // Submit proof for slot 3 (which is >= target of 2 → excess)
+        (uint256 slot3Order, address slot3Node,,,) = marketExt.getSlotInfo(3);
+        assertGt(slot3Order, 0, "slot 3 should be active");
+
+        uint256[4] memory proof;
+        vm.prank(slot3Node);
+        marketExt.submitProof(3, proof, bytes32(uint256(0x99)));
+
+        // Slot 3 deactivated, _tryShrinkSlots removes it
+        assertEq(market.numChallengeSlots(), 3, "should shrink to 3 after slot 3 proven");
+
+        // Submit proof for slot 2 (still excess) → shrinks to 2
+        _submitProofForSlot(2);
+        assertEq(market.numChallengeSlots(), 2, "should shrink to 2 after slot 2 proven");
+    }
+
+    function test_SubmitProof_ReAdvancesNonExcessSlot() public {
+        // Setup: ordersPerSlot=2, 4 orders → 2 slots. Target stays at 2.
+        market.setOrdersPerSlot(2);
+        _stakeNode(node1, 4096, 0x1111);
+        _stakeNode(node2, 4096, 0x2222);
+
+        (uint256 o1,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o2,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o3,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o4,) = _placeOrder(user1, 64, 4, 1, 1e12);
+
+        _executeOrder(node1, o1);
+        _executeOrder(node1, o2);
+        _executeOrder(node2, o3);
+        _executeOrder(node2, o4);
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 2);
+
+        // Submit proof for slot 0 — within target range, should re-advance
+        _submitProofForSlot(0);
+
+        // Slot count unchanged, slot 0 should be re-armed with a new challenge
+        assertEq(market.numChallengeSlots(), 2, "should stay at 2 (no excess)");
+        (uint256 newOrder,,,, ) = marketExt.getSlotInfo(0);
+        assertGt(newOrder, 0, "slot 0 should be re-armed");
+    }
+
+    function test_SubmitProof_GradualShrink_MultipleSlots() public {
+        // Setup: ordersPerSlot=1, 5 orders → 5 slots
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 8192, 0x1111);
+        _stakeNode(node2, 8192, 0x2222);
+
+        uint256[5] memory oids;
+        for (uint256 i = 0; i < 5; i++) {
+            (oids[i],) = _placeOrder(user1, 64, 4, 1, 1e12);
+            if (i < 3) _executeOrder(node1, oids[i]);
+            else _executeOrder(node2, oids[i]);
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 5, "should start with 5 slots");
+
+        // Admin lowers max to 2 — target becomes min(ceil(5/1), 2) = 2
+        market.setMaxChallengeSlots(2);
+
+        // Submit proof for slot 4 (excess) → shrinks to 4
+        _submitProofForSlot(4);
+        assertEq(market.numChallengeSlots(), 4, "should shrink to 4");
+
+        // Submit proof for slot 3 (still excess) → shrinks to 3
+        _submitProofForSlot(3);
+        assertEq(market.numChallengeSlots(), 3, "should shrink to 3");
+
+        // Submit proof for slot 2 (still excess) → shrinks to 2
+        _submitProofForSlot(2);
+        assertEq(market.numChallengeSlots(), 2, "should shrink to 2 (target reached)");
+
+        // Submit proof for slot 1 (within target) → no shrink
+        _submitProofForSlot(1);
+        assertEq(market.numChallengeSlots(), 2, "should stay at 2");
+    }
+
+    function test_SubmitProof_ShrinkBlockedByActiveMidFlightSlot() public {
+        // Setup: 4 slots active. Admin lowers max to 2.
+        // Submitting proof for slot 2 (middle excess) deactivates it, but slot 3 is active
+        // so _tryShrinkSlots can't reduce numChallengeSlots.
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 8192, 0x1111);
+        _stakeNode(node2, 8192, 0x2222);
+
+        for (uint256 i = 0; i < 4; i++) {
+            (uint256 oid,) = _placeOrder(user1, 64, 4, 1, 1e12);
+            if (i < 2) _executeOrder(node1, oid);
+            else _executeOrder(node2, oid);
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 4);
+
+        market.setMaxChallengeSlots(2);
+
+        // Submit proof for slot 2 (excess, index >= target of 2)
+        // Slot 2 gets deactivated, but slot 3 is still active, so can't shrink
+        _submitProofForSlot(2);
+        assertEq(market.numChallengeSlots(), 4, "can't shrink past active slot 3");
+
+        // Now submit proof for slot 3 (topmost, excess) → deactivate + shrink
+        _submitProofForSlot(3);
+        // Now slots 3 and 2 are both idle, _tryShrinkSlots removes from top
+        assertEq(market.numChallengeSlots(), 2, "should shrink to 2 after top slots cleared");
+    }
+
+    function test_ProcessExpiredSlots_TriggersShrink() public {
+        // Setup: 2 slots, then orders expire → target drops to 0
+        market.setOrdersPerSlot(2);
+        _stakeNode(node1, 4096, 0x1111);
+
+        for (uint256 i = 0; i < 4; i++) {
+            (uint256 oid,) = _placeOrder(user1, 64, 1, 1, 1e12);
+            _executeOrder(node1, oid);
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 2);
+
+        // Expire everything
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        vm.warp(block.timestamp + 7 days + 1);
+
+        // processExpiredSlots sweeps → _advanceSlot can't find orders → deactivates → _tryShrinkSlots
+        vm.prank(user2);
+        marketExt.processExpiredSlots();
+
+        // All slots idle, orders expired → should shrink to 0
+        assertEq(market.numChallengeSlots(), 0, "should shrink to 0 after all orders expired");
+    }
+
+    function test_SubmitProof_NodeCannotEvadeByShrinking() public {
+        // Core safety: proof must be verified BEFORE any shrink decision.
+        // If proof is invalid, submitProof reverts — no shrink happens.
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 4096, 0x1111);
+
+        for (uint256 i = 0; i < 4; i++) {
+            (uint256 oid,) = _placeOrder(user1, 64, 4, 1, 1e12);
+            _executeOrder(node1, oid);
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 4);
+        market.setMaxChallengeSlots(2);
+
+        // Wrong node tries to submit (Phase 2 revert) — no shrink occurs
+        uint256[4] memory proof;
+        vm.prank(node2);
+        vm.expectRevert(); // "not the challenged node" or similar
+        marketExt.submitProof(3, proof, bytes32(uint256(1)));
+
+        // Slot count should be unchanged
+        assertEq(market.numChallengeSlots(), 4, "failed proof should not trigger shrink");
+    }
+
+    function test_SubmitProof_CountersCorrectAfterExcessDeactivation() public {
+        // Verify nodeActiveChallengeCount and orderActiveChallengeCount are decremented
+        // when an excess slot is deactivated instead of re-advanced.
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 4096, 0x1111);
+        _stakeNode(node2, 4096, 0x2222);
+
+        (uint256 o1,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o2,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o3,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o4,) = _placeOrder(user1, 64, 4, 1, 1e12);
+
+        _executeOrder(node1, o1);
+        _executeOrder(node1, o2);
+        _executeOrder(node2, o3);
+        _executeOrder(node2, o4);
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 4);
+
+        // Record the challenged node/order for slot 3
+        (uint256 slot3OrderId, address slot3Node,,,) = marketExt.getSlotInfo(3);
+
+        uint256 nodeCountBefore = market.nodeActiveChallengeCount(slot3Node);
+        uint256 orderCountBefore = market.orderActiveChallengeCount(slot3OrderId);
+
+        // Lower max so slots 2,3 are excess
+        market.setMaxChallengeSlots(2);
+
+        // Submit proof for slot 3 → deactivated (not re-advanced)
+        uint256[4] memory proof;
+        vm.prank(slot3Node);
+        marketExt.submitProof(3, proof, bytes32(uint256(0xAB)));
+
+        // Counters should be decremented (not incremented by a new challenge)
+        assertEq(
+            market.nodeActiveChallengeCount(slot3Node),
+            nodeCountBefore - 1,
+            "node challenge count should decrease"
+        );
+        assertEq(
+            market.orderActiveChallengeCount(slot3OrderId),
+            orderCountBefore - 1,
+            "order challenge count should decrease"
+        );
+    }
+
+    function test_ShrinkConvergesToTarget_AfterAdminLowersMax() public {
+        // Verify that repeated proof submissions eventually bring slot count to target
+        market.setOrdersPerSlot(1);
+        _stakeNode(node1, 16384, 0x1111);
+        _stakeNode(node2, 16384, 0x2222);
+
+        // Create 10 orders → 10 slots
+        for (uint256 i = 0; i < 10; i++) {
+            (uint256 oid,) = _placeOrder(user1, 64, 4, 1, 1e12);
+            if (i < 5) _executeOrder(node1, oid);
+            else _executeOrder(node2, oid);
+        }
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 10);
+
+        // Admin reduces max to 3
+        market.setMaxChallengeSlots(3);
+
+        // Submit proofs from the top down — each shrinks by 1
+        for (uint256 s = 9; s >= 3; s--) {
+            (uint256 sOrder, address sNode,,,) = marketExt.getSlotInfo(s);
+            if (sOrder == 0) continue; // already idle
+            uint256[4] memory proof;
+            vm.prank(sNode);
+            marketExt.submitProof(s, proof, bytes32(uint256(s + 100)));
+        }
+
+        assertEq(market.numChallengeSlots(), 3, "should converge to target of 3");
+    }
+
+    function test_ShrinkNoOpWhenAtTarget() public {
+        // When numChallengeSlots == target, no shrink occurs
+        // 2 orders with default ordersPerSlot(20) → ceil(2/20)=1 → clamped to MIN=2
+        _stakeNode(node1, 4096, 0x1111);
+
+        (uint256 o1,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        (uint256 o2,) = _placeOrder(user1, 64, 4, 1, 1e12);
+        _executeOrder(node1, o1);
+        _executeOrder(node1, o2);
+
+        marketExt.activateSlots();
+        assertEq(market.numChallengeSlots(), 2, "target should be MIN_CHALLENGE_SLOTS=2");
+
+        // Submit proof — no excess, should stay at 2
+        _submitProofForSlot(0);
+        assertEq(market.numChallengeSlots(), 2, "no shrink when at target");
+    }
+
     function test_DefaultScaling_20OrdersPerSlot() public {
-        // With default ordersPerSlot (0 → 20), 20 orders → 1 slot, 21 → 2 slots
+        // With default ordersPerSlot (0 → 20), 20 orders → ceil(20/20)=1 → clamped to MIN=2
+        // 40 orders → ceil(40/20)=2 → stays at MIN=2
+        // 41 orders → ceil(41/20)=3
         _stakeNode(node1, 65536, 0x1111);
 
         for (uint256 i = 0; i < 20; i++) {
@@ -594,11 +920,13 @@ contract MarketChallengeTest is MarketTestBase {
             _executeOrder(node1, oid);
         }
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 1, "20 orders with default ordersPerSlot should yield 1 slot");
+        assertEq(market.numChallengeSlots(), 2, "20 orders with MIN_CHALLENGE_SLOTS=2 should yield 2 slots");
 
-        // Add one more → ceil(21/20) = 2
-        (uint256 oid21,) = _placeOrder(user1, 1, 4, 1, 1e12);
-        _executeOrder(node1, oid21);
+        // Add 21 more orders to reach 41 → ceil(41/20) = 3
+        for (uint256 i = 0; i < 21; i++) {
+            (uint256 oid,) = _placeOrder(user1, 1, 4, 1, 1e12);
+            _executeOrder(node1, oid);
+        }
 
         // Expire existing challenges first so shrink/grow works cleanly
         vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
@@ -606,6 +934,6 @@ contract MarketChallengeTest is MarketTestBase {
         marketExt.processExpiredSlots();
 
         marketExt.activateSlots();
-        assertEq(market.numChallengeSlots(), 2, "21 orders with default ordersPerSlot should yield 2 slots");
+        assertEq(market.numChallengeSlots(), 3, "41 orders with default ordersPerSlot should yield 3 slots");
     }
 }

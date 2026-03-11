@@ -44,8 +44,19 @@ abstract contract MarketChallenge is MarketHelpers {
 
         emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
-        // Phase 4: advance slot using commitment-derived randomness (same seed as Phase 1)
-        _advanceSlot(_slotIndex, commitmentRandomness);
+        // Phase 4: advance or deactivate, then try to shrink excess slots.
+        // Calculate target AFTER Phase 1 sweep (which may evict expired orders).
+        uint256 targetSlots = _calculateTargetSlots();
+        if (targetSlots < numChallengeSlots && _slotIndex >= targetSlots) {
+            // This slot is in the excess range — deactivate instead of re-advancing.
+            // Proof was already verified above, so the node fulfilled its duty.
+            nodeActiveChallengeCount[slot.challengedNode]--;
+            orderActiveChallengeCount[slotOrderId]--;
+            _deactivateSlot(_slotIndex);
+        } else {
+            _advanceSlot(_slotIndex, commitmentRandomness);
+        }
+        _tryShrinkSlots(targetSlots);
     }
 
     /// @notice Maintenance function: anyone can call to slash expired slots and earn reporter rewards.
@@ -55,6 +66,7 @@ abstract contract MarketChallenge is MarketHelpers {
         uint256 processed = _sweepExpiredSlots(msg.sender, MAX_SWEEP_PER_CALL, 0);
         require(processed > 0, "no expired slots");
         emit ExpiredSlotsProcessed(processed, msg.sender);
+        _tryShrinkSlots(_calculateTargetSlots());
     }
 
     /// @notice Bootstrap or refill idle challenge slots with challengeable orders.
@@ -75,19 +87,9 @@ abstract contract MarketChallenge is MarketHelpers {
         // Clean up expired orders before filling slots
         _cleanupExpiredOrders();
 
-        // --- Auto-scale slot count via ceil(N / ordersPerSlot) ---
+        // --- Auto-scale slot count ---
+        uint256 targetSlots = _calculateTargetSlots();
         uint256 orderCount = challengeableOrders.length;
-        uint256 targetSlots;
-        if (orderCount == 0) {
-            targetSlots = 0;
-        } else {
-            uint256 divisor = ordersPerSlot > 0 ? ordersPerSlot : DEFAULT_ORDERS_PER_SLOT;
-            targetSlots = (orderCount + divisor - 1) / divisor; // ceil division
-            if (targetSlots < MIN_CHALLENGE_SLOTS) targetSlots = MIN_CHALLENGE_SLOTS;
-            uint256 maxSlots_ = maxChallengeSlots > 0 ? maxChallengeSlots : DEFAULT_MAX_CHALLENGE_SLOTS;
-            if (targetSlots > maxSlots_) targetSlots = maxSlots_;
-        }
-
         uint256 currentCount = numChallengeSlots;
 
         // Growth: new mapping entries default to zero (idle)
@@ -97,29 +99,9 @@ abstract contract MarketChallenge is MarketHelpers {
             currentCount = targetSlots;
         }
 
-        // Shrinkage: deactivate excess high-index slots (only idle or expired)
-        if (targetSlots < currentCount) {
-            uint256 newCount = currentCount;
-            for (uint256 i = currentCount; i > targetSlots;) {
-                i--;
-                ChallengeSlot storage slot = challengeSlots[i];
-                if (slot.orderId == 0) {
-                    newCount = i;
-                } else if (block.number > slot.deadlineBlock) {
-                    nodeActiveChallengeCount[slot.challengedNode]--;
-                    orderActiveChallengeCount[slot.orderId]--;
-                    _deactivateSlot(i);
-                    newCount = i;
-                } else {
-                    break; // active mid-flight — stop shrinking
-                }
-            }
-            if (newCount != currentCount) {
-                emit ChallengeSlotsScaled(currentCount, newCount);
-                numChallengeSlots = newCount;
-                currentCount = newCount;
-            }
-        }
+        // Shrinkage: deactivate excess high-index idle slots
+        _tryShrinkSlots(targetSlots);
+        currentCount = numChallengeSlots;
 
         // Cap active slots at the number of challengeable orders to avoid
         // filling multiple slots with the same order during cold-start
@@ -278,6 +260,43 @@ abstract contract MarketChallenge is MarketHelpers {
         slot.randomness = 0;
         slot.deadlineBlock = 0;
         emit SlotDeactivated(_slotIndex);
+    }
+
+    /// @notice Calculate the target number of challenge slots based on current order count.
+    /// Uses ceil(orderCount / ordersPerSlot), clamped to [MIN_CHALLENGE_SLOTS, maxChallengeSlots].
+    function _calculateTargetSlots() internal view returns (uint256) {
+        uint256 orderCount = challengeableOrders.length;
+        if (orderCount == 0) return 0;
+        uint256 divisor = ordersPerSlot > 0 ? ordersPerSlot : DEFAULT_ORDERS_PER_SLOT;
+        uint256 target = (orderCount + divisor - 1) / divisor;
+        if (target < MIN_CHALLENGE_SLOTS) target = MIN_CHALLENGE_SLOTS;
+        uint256 maxSlots_ = maxChallengeSlots > 0 ? maxChallengeSlots : DEFAULT_MAX_CHALLENGE_SLOTS;
+        if (target > maxSlots_) target = maxSlots_;
+        return target;
+    }
+
+    /// @notice Shrink excess high-index slots that are idle (orderId == 0).
+    /// Active or expired slots block further shrinking — expired slots must be swept
+    /// (and slashed) via _sweepExpiredSlots before they can be removed.
+    /// @param _targetSlots Desired slot count.
+    function _tryShrinkSlots(uint256 _targetSlots) internal {
+        uint256 currentCount = numChallengeSlots;
+        if (_targetSlots >= currentCount) return;
+
+        uint256 newCount = currentCount;
+        for (uint256 i = currentCount; i > _targetSlots;) {
+            i--;
+            if (challengeSlots[i].orderId == 0) {
+                newCount = i;
+            } else {
+                break; // active or expired — stop shrinking
+            }
+        }
+
+        if (newCount != currentCount) {
+            emit ChallengeSlotsScaled(currentCount, newCount);
+            numChallengeSlots = newCount;
+        }
     }
 
     /// @notice Sweep expired slots: slash failed nodes, advance or deactivate.
