@@ -64,6 +64,7 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         address challenger; // who issued the challenge
         uint256 fileRoot; // snapshot of order file root at challenge time
         uint32 numChunks; // snapshot of order numChunks at challenge time
+        uint256 bondAmount; // challenger bond locked until the challenge resolves
     }
 
     // Order management
@@ -173,8 +174,18 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     uint256 public ordersPerSlot; // orders per challenge slot (0 = use DEFAULT_ORDERS_PER_SLOT)
     uint256 public maxChallengeSlots; // admin-tunable cap (0 = use DEFAULT_MAX_CHALLENGE_SLOTS)
 
-    // Reserve 194 slots for future storage variables
-    uint256[194] private __gap;
+    // Economic tuning parameters
+    uint256 public minPricePerChunkPerPeriod; // admin-set floor to reject underpriced orders
+    uint256 public onDemandChallengeBond; // optional bond challengers lock to issue manual challenges
+    uint256 public proofFailurePenaltyBpsPerStrike; // extra slash bps applied per prior unresolved proof failure
+    uint256 public maxProofFailurePenaltyBps; // cap on the repeat-failure penalty component
+    mapping(address => uint256) public nodeProofFailureCount; // consecutive unresolved proof failures, reset on success
+
+    uint256 public constant MAX_REPEAT_FAILURE_PENALTY_BPS_PER_STRIKE = 10_000; // +100% per strike max
+    uint256 public constant MAX_REPEAT_FAILURE_PENALTY_BPS_CAP = 30_000; // repeat penalty capped at +300%
+
+    // Reserve 188 slots for future storage variables
+    uint256[188] private __gap;
 
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event SlashAuthorityUpdated(address indexed authority, bool allowed);
@@ -221,6 +232,18 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
     event ExpiredSlotsProcessed(uint256 processedCount, address indexed reporter);
     event OrdersPerSlotUpdated(uint256 oldValue, uint256 newValue);
     event MaxChallengeSlotsUpdated(uint256 oldValue, uint256 newValue);
+    event MinPricePerChunkPerPeriodUpdated(uint256 oldValue, uint256 newValue);
+    event OnDemandChallengeBondUpdated(uint256 oldValue, uint256 newValue);
+    event ProofFailurePenaltyTuningUpdated(
+        uint256 oldPerStrikeBps, uint256 newPerStrikeBps, uint256 oldMaxBps, uint256 newMaxBps
+    );
+    event OnDemandChallengeBondEscrowed(
+        uint256 indexed orderId, address indexed node, address indexed challenger, uint256 amount
+    );
+    event OnDemandChallengeBondRefunded(
+        uint256 indexed orderId, address indexed node, address indexed challenger, uint256 amount
+    );
+    event OnDemandChallengeBondAwarded(uint256 indexed orderId, address indexed node, uint256 amount);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -236,6 +259,8 @@ abstract contract MarketStorage is Initializable, UUPSUpgradeable {
         reporterRewardBps = 1000; // 10% default (basis points)
         proofFailureSlashMultiplier = 3; // 3x order period cost for challenge failure
         clientCompensationBps = 2000; // 20% of slash to affected client
+        proofFailurePenaltyBpsPerStrike = 2500; // +25% slash after each unresolved prior proof failure
+        maxProofFailurePenaltyBps = 10000; // cap repeat-failure penalty at +100%
     }
 
     modifier onlyOwner() {

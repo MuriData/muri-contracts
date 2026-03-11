@@ -36,6 +36,50 @@ abstract contract MarketHelpers is MarketAdmin {
         return order.escrow / (uint256(order.numChunks) * uint256(order.periods) * uint256(order.replicas));
     }
 
+    /// @notice Compute the current repeat-failure penalty component for a node.
+    function _proofFailurePenaltyBps(address _node) internal view returns (uint256 penaltyBps) {
+        uint256 failures = nodeProofFailureCount[_node];
+        if (failures == 0 || proofFailurePenaltyBpsPerStrike == 0) {
+            return 0;
+        }
+
+        penaltyBps = failures * proofFailurePenaltyBpsPerStrike;
+        uint256 cap = maxProofFailurePenaltyBps;
+        if (penaltyBps > cap) {
+            penaltyBps = cap;
+        }
+    }
+
+    /// @notice Calculate the slash amount for a failed proof obligation, including repeat-failure penalties.
+    function _calculateProofFailureSlashAmount(address _node, uint256 _orderId)
+        internal
+        view
+        returns (uint256 slashAmount)
+    {
+        FileOrder storage order = orders[_orderId];
+        uint256 baseSlash = uint256(order.numChunks) * _orderPrice(order) * proofFailureSlashMultiplier;
+        slashAmount = baseSlash > MIN_PROOF_FAILURE_SLASH ? baseSlash : MIN_PROOF_FAILURE_SLASH;
+
+        uint256 repeatPenaltyBps = _proofFailurePenaltyBps(_node);
+        if (repeatPenaltyBps > 0) {
+            slashAmount += slashAmount * repeatPenaltyBps / 10000;
+        }
+    }
+
+    /// @notice Reset a node's proof failure streak after a valid proof submission.
+    function _recordProofSuccess(address _node) internal {
+        if (nodeProofFailureCount[_node] > 0) {
+            nodeProofFailureCount[_node] = 0;
+        }
+    }
+
+    /// @notice Increment a node's proof failure streak after an unresolved challenge.
+    function _recordProofFailure(address _node) internal {
+        unchecked {
+            nodeProofFailureCount[_node]++;
+        }
+    }
+
     /// @notice Find the start period for a node's assignment to an order.
     function _getNodeStartPeriod(uint256 _orderId, address _node)
         internal

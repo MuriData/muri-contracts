@@ -10,10 +10,11 @@ import {PrecompileVerifiers} from "../verifiers/PrecompileVerifiers.sol";
 abstract contract MarketOnDemandChallenge is MarketHelpers {
     /// @notice Issue an on-demand challenge for a specific (order, node) pair.
     /// Anyone can call. Separate from the automated slot system.
-    function challengeNode(uint256 _orderId, address _node) external nonReentrant {
+    function challengeNode(uint256 _orderId, address _node) external payable nonReentrant {
         FileOrder storage order = orders[_orderId];
         require(order.owner != address(0), "order does not exist");
         require(!isOrderExpired(_orderId), "order expired");
+        require(msg.value >= onDemandChallengeBond, "insufficient challenge bond");
 
         // Verify node is assigned to this order
         NodeAssignment[] storage assignments = orderAssignments[_orderId];
@@ -45,8 +46,18 @@ abstract contract MarketOnDemandChallenge is MarketHelpers {
         challenge.challenger = msg.sender;
         challenge.fileRoot = order.fileRoot;
         challenge.numChunks = order.numChunks;
+        challenge.bondAmount = onDemandChallengeBond;
 
         emit OnDemandChallengeIssued(_orderId, _node, msg.sender, deadline);
+        if (onDemandChallengeBond > 0) {
+            emit OnDemandChallengeBondEscrowed(_orderId, _node, msg.sender, onDemandChallengeBond);
+        }
+
+        if (msg.value > onDemandChallengeBond) {
+            uint256 excess = msg.value - onDemandChallengeBond;
+            pendingRefunds[msg.sender] += excess;
+            emit RefundQueued(msg.sender, excess);
+        }
     }
 
     /// @notice Submit proof for an on-demand challenge. Only the challenged node can call.
@@ -59,6 +70,8 @@ abstract contract MarketOnDemandChallenge is MarketHelpers {
         require(challenge.randomness != 0, "no active on-demand challenge");
         require(block.number <= challenge.deadlineBlock, "on-demand challenge expired");
 
+        uint256 bondAmount = challenge.bondAmount;
+
         // Verify ZK proof using the file root snapshot stored at challenge time
         // (order may have been cancelled, but the challenge remains valid)
         (,,, uint256 publicKey) = nodeStaking.getNodeInfo(msg.sender);
@@ -67,12 +80,20 @@ abstract contract MarketOnDemandChallenge is MarketHelpers {
         uint256[5] memory publicInputs =
             [uint256(_commitment), challenge.randomness, publicKey, challenge.fileRoot, uint256(challenge.numChunks)];
         PrecompileVerifiers.verifyPoiProof(_proof, publicInputs);
+        _recordProofSuccess(msg.sender);
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement
         challenge.randomness = 0;
         challenge.challenger = address(0);
         challenge.fileRoot = 0;
         challenge.numChunks = 0;
+        challenge.bondAmount = 0;
+
+        if (bondAmount > 0) {
+            pendingRefunds[msg.sender] += bondAmount;
+            emit RefundQueued(msg.sender, bondAmount);
+            emit OnDemandChallengeBondAwarded(_orderId, msg.sender, bondAmount);
+        }
 
         emit OnDemandProofSubmitted(_orderId, msg.sender, _commitment);
     }
@@ -85,23 +106,30 @@ abstract contract MarketOnDemandChallenge is MarketHelpers {
         require(block.number > challenge.deadlineBlock, "on-demand challenge not expired");
 
         address challenger = challenge.challenger;
+        uint256 bondAmount = challenge.bondAmount;
 
         // Clear active fields but preserve deadlineBlock for cooldown enforcement (CEI pattern)
         challenge.randomness = 0;
         challenge.challenger = address(0);
         challenge.fileRoot = 0;
         challenge.numChunks = 0;
+        challenge.bondAmount = 0;
 
         // If the order was cancelled/deleted, the node cannot be faulted — skip slashing.
         FileOrder storage order = orders[_orderId];
         if (order.owner == address(0)) {
+            if (bondAmount > 0) {
+                pendingRefunds[challenger] += bondAmount;
+                emit RefundQueued(challenger, bondAmount);
+                emit OnDemandChallengeBondRefunded(_orderId, _node, challenger, bondAmount);
+            }
             emit OnDemandChallengeExpired(_orderId, _node, 0);
             return;
         }
 
         // Apply same slash formula as slot-based challenges
-        uint256 scaledSlash = uint256(order.numChunks) * _orderPrice(order) * proofFailureSlashMultiplier;
-        uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
+        uint256 slashAmount = _calculateProofFailureSlashAmount(_node, _orderId);
+        _recordProofFailure(_node);
 
         if (nodeStaking.isValidNode(_node)) {
             (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(_node);
@@ -117,6 +145,12 @@ abstract contract MarketOnDemandChallenge is MarketHelpers {
                 }
                 emit NodeSlashed(_node, slashAmount, "failed on-demand challenge");
             }
+        }
+
+        if (bondAmount > 0) {
+            pendingRefunds[challenger] += bondAmount;
+            emit RefundQueued(challenger, bondAmount);
+            emit OnDemandChallengeBondRefunded(_orderId, _node, challenger, bondAmount);
         }
 
         emit OnDemandChallengeExpired(_orderId, _node, slashAmount);

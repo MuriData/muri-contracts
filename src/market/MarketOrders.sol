@@ -21,6 +21,7 @@ abstract contract MarketOrders is MarketHelpers {
         require(_periods > 0, "invalid periods");
         require(_replicas > 0 && _replicas <= MAX_REPLICAS, "invalid replicas");
         require(_pricePerChunkPerPeriod > 0, "invalid price");
+        require(_pricePerChunkPerPeriod >= minPricePerChunkPerPeriod, "price below floor");
 
         // Verify file size proof: proves numChunks is the exact boundary in the SMT
         uint256[2] memory fspInputs = [_fileRoot, uint256(_numChunks)];

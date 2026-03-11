@@ -6,6 +6,33 @@ import {MarketTestBase} from "./MarketBase.t.sol";
 /// @notice Tests for the economic redesign (Changes 1-6)
 contract MarketEconomicsTest is MarketTestBase {
     // =========================================================================
+    // Change 0: Pricing Guardrails
+    // =========================================================================
+
+    function test_MinPriceFloor_DefaultIsZero() public view {
+        assertEq(market.minPricePerChunkPerPeriod(), 0, "price floor defaults to zero");
+    }
+
+    function test_MinPriceFloor_AdminCanUpdate() public {
+        marketExt2.setMinPricePerChunkPerPeriod(2e12);
+        assertEq(market.minPricePerChunkPerPeriod(), 2e12);
+    }
+
+    function test_MinPriceFloor_RevertBelowFloor() public {
+        marketExt2.setMinPricePerChunkPerPeriod(2e12);
+
+        vm.prank(user1);
+        vm.expectRevert("price below floor");
+        market.placeOrder{value: uint256(1024) * 4 * 1e12}(FILE_ROOT, FILE_URI, 1024, 4, 1, 1e12, _emptyFspProof());
+    }
+
+    function test_MinPriceFloor_RevertNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert("not owner");
+        marketExt2.setMinPricePerChunkPerPeriod(2e12);
+    }
+
+    // =========================================================================
     // Change 1: Challenge Slash Multiplier
     // =========================================================================
 
@@ -98,10 +125,11 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Verify challenge is stored
         bytes32 key = keccak256(abi.encodePacked(orderId, node1));
-        (uint64 deadline, uint256 randomness, address challenger,,) = market.onDemandChallenges(key);
+        (uint64 deadline, uint256 randomness, address challenger,,, uint256 bondAmount) = market.onDemandChallenges(key);
         assertGt(deadline, 0, "deadline set");
         assertGt(randomness, 0, "randomness set");
         assertEq(challenger, user2, "challenger recorded");
+        assertEq(bondAmount, 0, "default bond is zero");
     }
 
     function test_OnDemand_RevertOrderDoesNotExist() public {
@@ -175,6 +203,79 @@ contract MarketEconomicsTest is MarketTestBase {
 
         // Reporter (user2) should get reward
         assertGt(market.reporterPendingRewards(user2), 0, "reporter gets reward");
+    }
+
+    function test_OnDemandBond_RevertInsufficientBond() public {
+        _stakeDefaultNode(node1, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        marketExt2.setOnDemandChallengeBond(0.1 ether);
+
+        vm.prank(user2);
+        vm.expectRevert("insufficient challenge bond");
+        marketExt2.challengeNode(orderId, node1);
+    }
+
+    function test_OnDemandBond_NodeGetsBondWhenItProves() public {
+        _stakeDefaultNode(node1, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        uint256 bond = 0.1 ether;
+        marketExt2.setOnDemandChallengeBond(bond);
+
+        vm.prank(user2);
+        marketExt2.challengeNode{value: bond}(orderId, node1);
+
+        uint256 nodeRefundBefore = market.pendingRefunds(node1);
+        uint256[4] memory proof;
+        vm.prank(node1);
+        marketExt2.submitOnDemandProof(orderId, proof, bytes32(uint256(1)));
+
+        assertEq(market.pendingRefunds(node1) - nodeRefundBefore, bond, "bond queued to the node");
+    }
+
+    function test_OnDemandBond_ChallengerRefundedWhenNodeFails() public {
+        uint64 nodeCapacity = 10000;
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        uint256 bond = 0.1 ether;
+        marketExt2.setOnDemandChallengeBond(bond);
+
+        vm.prank(user2);
+        marketExt2.challengeNode{value: bond}(orderId, node1);
+
+        uint256 challengerRefundBefore = market.pendingRefunds(user2);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+
+        vm.prank(user2);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+
+        assertEq(market.pendingRefunds(user2) - challengerRefundBefore, bond, "bond refunded to challenger");
+    }
+
+    function test_OnDemandBond_ChallengerRefundedWhenOrderCancelled() public {
+        _stakeDefaultNode(node1, 0x1234);
+        (uint256 orderId,) = _placeDefaultOrder(user1, 1);
+        _executeOrder(node1, orderId);
+
+        uint256 bond = 0.1 ether;
+        marketExt2.setOnDemandChallengeBond(bond);
+
+        vm.prank(user2);
+        marketExt2.challengeNode{value: bond}(orderId, node1);
+
+        vm.prank(user1);
+        market.cancelOrder(orderId);
+
+        uint256 challengerRefundBefore = market.pendingRefunds(user2);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+
+        assertEq(market.pendingRefunds(user2) - challengerRefundBefore, bond, "bond refunded after cancellation");
     }
 
     function test_OnDemand_SubmitProofReverts_WhenNoChallenge() public {
@@ -303,6 +404,17 @@ contract MarketEconomicsTest is MarketTestBase {
         // Immediate re-challenge should fail (cooldown)
         vm.expectRevert("on-demand challenge cooldown");
         marketExt2.challengeNode(orderId, node1);
+    }
+
+    function test_OnDemandBond_AdminCanUpdate() public {
+        marketExt2.setOnDemandChallengeBond(0.2 ether);
+        assertEq(market.onDemandChallengeBond(), 0.2 ether);
+    }
+
+    function test_OnDemandBond_RevertNotOwner() public {
+        vm.prank(user1);
+        vm.expectRevert("not owner");
+        marketExt2.setOnDemandChallengeBond(0.2 ether);
     }
 
     // =========================================================================
@@ -736,5 +848,101 @@ contract MarketEconomicsTest is MarketTestBase {
 
         uint256 clientRefundAfter = market.pendingRefunds(user1);
         assertTrue(clientRefundAfter > clientRefundBefore, "client gets comp from on-demand challenge failure");
+    }
+
+    // =========================================================================
+    // Repeat-Failure Penalties
+    // =========================================================================
+
+    function test_RepeatFailurePenalty_DefaultTuning() public view {
+        assertEq(market.proofFailurePenaltyBpsPerStrike(), 2500, "default per-strike penalty");
+        assertEq(market.maxProofFailurePenaltyBps(), 10000, "default penalty cap");
+    }
+
+    function test_RepeatFailurePenalty_AdminCanUpdate() public {
+        marketExt2.setProofFailurePenaltyTuning(4000, 12000);
+        assertEq(market.proofFailurePenaltyBpsPerStrike(), 4000);
+        assertEq(market.maxProofFailurePenaltyBps(), 12000);
+    }
+
+    function test_RepeatFailurePenalty_RevertWhenPerStrikeTooHigh() public {
+        vm.expectRevert("per-strike bps too high");
+        marketExt2.setProofFailurePenaltyTuning(10001, 12000);
+    }
+
+    function test_RepeatFailurePenalty_RevertWhenMaxTooHigh() public {
+        vm.expectRevert("max bps too high");
+        marketExt2.setProofFailurePenaltyTuning(4000, 30001);
+    }
+
+    function test_RepeatFailurePenalty_SecondFailureCostsMore() public {
+        uint32 size = 30000;
+        uint256 price = 1e13;
+        uint64 nodeCapacity = 100000;
+        uint256 baseSlash = uint256(size) * price * 3;
+
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeOrder(user1, size, 4, 1, price);
+        _executeOrder(node1, orderId);
+
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
+        vm.prank(user2);
+        marketExt2.challengeNode(orderId, node1);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        vm.prank(user2);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+        (uint256 stakeAfterFirst,,,) = nodeStaking.getNodeInfo(node1);
+        uint256 firstSlash = stakeBefore - stakeAfterFirst;
+
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 2 + 1);
+        vm.prank(user2);
+        marketExt2.challengeNode(orderId, node1);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 3 + 5);
+        vm.prank(user2);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+        (uint256 stakeAfterSecond,,,) = nodeStaking.getNodeInfo(node1);
+        uint256 secondSlash = stakeAfterFirst - stakeAfterSecond;
+
+        assertEq(firstSlash, baseSlash, "first failure uses base slash");
+        assertEq(secondSlash, baseSlash + (baseSlash * 2500 / 10000), "second failure includes repeat penalty");
+        assertEq(market.nodeProofFailureCount(node1), 2, "failure streak increments");
+    }
+
+    function test_RepeatFailurePenalty_SuccessResetsFailureCount() public {
+        uint32 size = 30000;
+        uint256 price = 1e13;
+        uint64 nodeCapacity = 100000;
+        uint256 baseSlash = uint256(size) * price * 3;
+
+        _stakeNode(node1, nodeCapacity, 0x1234);
+        (uint256 orderId,) = _placeOrder(user1, size, 4, 1, price);
+        _executeOrder(node1, orderId);
+
+        vm.prank(user2);
+        marketExt2.challengeNode(orderId, node1);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS + 1);
+        vm.prank(user2);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+        assertEq(market.nodeProofFailureCount(node1), 1, "failure streak recorded");
+
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 2 + 1);
+        vm.prank(user2);
+        marketExt2.challengeNode(orderId, node1);
+        uint256[4] memory proof;
+        vm.prank(node1);
+        marketExt2.submitOnDemandProof(orderId, proof, bytes32(uint256(0x42)));
+        assertEq(market.nodeProofFailureCount(node1), 0, "success resets streak");
+
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 4 + 1);
+        vm.prank(user2);
+        marketExt2.challengeNode(orderId, node1);
+        (uint256 stakeBefore,,,) = nodeStaking.getNodeInfo(node1);
+        vm.roll(block.number + CHALLENGE_WINDOW_BLOCKS * 3 + 5);
+        vm.prank(user2);
+        marketExt2.processExpiredOnDemandChallenge(orderId, node1);
+        (uint256 stakeAfter,,,) = nodeStaking.getNodeInfo(node1);
+
+        assertEq(stakeBefore - stakeAfter, baseSlash, "post-reset failure returns to base slash");
+        assertEq(market.nodeProofFailureCount(node1), 1, "streak restarts after reset");
     }
 }

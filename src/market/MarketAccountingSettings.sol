@@ -34,6 +34,33 @@ abstract contract MarketAccountingSettings is MarketOnDemandChallenge {
         emit ClientCompensationBpsUpdated(oldBps, _newBps);
     }
 
+    /// @notice Set the minimum allowable order price per chunk per period.
+    function setMinPricePerChunkPerPeriod(uint256 _newFloor) external onlyOwner {
+        uint256 oldFloor = minPricePerChunkPerPeriod;
+        minPricePerChunkPerPeriod = _newFloor;
+        emit MinPricePerChunkPerPeriodUpdated(oldFloor, _newFloor);
+    }
+
+    /// @notice Set the challenger bond required for on-demand challenges.
+    function setOnDemandChallengeBond(uint256 _newBond) external onlyOwner {
+        uint256 oldBond = onDemandChallengeBond;
+        onDemandChallengeBond = _newBond;
+        emit OnDemandChallengeBondUpdated(oldBond, _newBond);
+    }
+
+    /// @notice Set the repeat-failure penalty schedule for unresolved proof obligations.
+    function setProofFailurePenaltyTuning(uint256 _newPerStrikeBps, uint256 _newMaxBps) external onlyOwner {
+        require(_newPerStrikeBps <= MAX_REPEAT_FAILURE_PENALTY_BPS_PER_STRIKE, "per-strike bps too high");
+        require(_newMaxBps <= MAX_REPEAT_FAILURE_PENALTY_BPS_CAP, "max bps too high");
+
+        uint256 oldPerStrikeBps = proofFailurePenaltyBpsPerStrike;
+        uint256 oldMaxBps = maxProofFailurePenaltyBps;
+        proofFailurePenaltyBpsPerStrike = _newPerStrikeBps;
+        maxProofFailurePenaltyBps = _newMaxBps;
+
+        emit ProofFailurePenaltyTuningUpdated(oldPerStrikeBps, _newPerStrikeBps, oldMaxBps, _newMaxBps);
+    }
+
     /// @notice Get reporter earnings info
     function getReporterEarningsInfo(address _reporter)
         external

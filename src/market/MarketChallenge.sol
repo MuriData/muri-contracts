@@ -41,6 +41,7 @@ abstract contract MarketChallenge is MarketHelpers {
             [uint256(_commitment), slotRandomness, publicKey, fileRootHash, uint256(order.numChunks)];
 
         PrecompileVerifiers.verifyPoiProof(_proof, publicInputs);
+        _recordProofSuccess(msg.sender);
 
         emit SlotProofSubmitted(_slotIndex, msg.sender, _commitment);
 
@@ -324,11 +325,9 @@ abstract contract MarketChallenge is MarketHelpers {
             if (slot.orderId != 0 && block.number > slot.deadlineBlock) {
                 address failedNode = slot.challengedNode;
 
-                // Slash the failed node — proportional to order value * multiplier, floored at MIN_PROOF_FAILURE_SLASH
                 uint256 slotOrderId_ = slot.orderId;
-                FileOrder storage order = orders[slotOrderId_];
-                uint256 scaledSlash = uint256(order.numChunks) * _orderPrice(order) * proofFailureSlashMultiplier;
-                uint256 slashAmount = scaledSlash > MIN_PROOF_FAILURE_SLASH ? scaledSlash : MIN_PROOF_FAILURE_SLASH;
+                uint256 slashAmount = _calculateProofFailureSlashAmount(failedNode, slotOrderId_);
+                _recordProofFailure(failedNode);
 
                 if (nodeStaking.isValidNode(failedNode)) {
                     (uint256 nodeStake,,,) = nodeStaking.getNodeInfo(failedNode);
